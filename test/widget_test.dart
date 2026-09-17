@@ -1,14 +1,19 @@
 import 'dart:convert';
+import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:setthi/config/setu_config.dart';
+import 'package:setthi/config/supabase_config.dart';
 import 'package:setthi/main.dart';
+import 'package:setthi/screens/verify_email_screen.dart';
 import 'package:setthi/models/transaction_model.dart';
+import 'package:setthi/providers/auth_providers.dart';
 import 'package:setthi/providers/transaction_providers.dart';
 import 'package:setthi/services/fi_data_service.dart';
 import 'package:setthi/services/setu_aa_service.dart';
+import 'package:setthi/widgets/dpc_floating_dock.dart';
 
 class _FakeTestRepository implements TransactionRepository {
   final List<BankTransaction> _txns;
@@ -19,13 +24,19 @@ class _FakeTestRepository implements TransactionRepository {
 }
 
 void main() {
-  group('SetuConfig tests', () {
+  group('SetuConfig & SupabaseConfig tests', () {
     test('Reads default sandbox configuration', () {
       expect(SetuConfig.baseUrl, isNotEmpty);
       expect(SetuConfig.authHeaders.containsKey('x-client-id'), isTrue);
       expect(SetuConfig.authHeaders.containsKey('x-client-secret'), isTrue);
       expect(SetuConfig.authHeaders.containsKey('x-product-instance-id'), isTrue);
       expect(SetuConfig.redirectUrl, isNotEmpty);
+    });
+
+    test('SupabaseConfig correctly parses environment variables from secrets.json', () {
+      expect(SupabaseConfig.url, contains('supabase.co'));
+      expect(SupabaseConfig.publishableKey, isNotEmpty);
+      expect(SupabaseConfig.isConfigured, isTrue);
     });
   });
 
@@ -295,6 +306,14 @@ void main() {
       final balance = container.read(latestBalanceProvider);
       expect(balance, 24500.0);
     });
+
+    test('Auth providers resolve unauthenticated by default', () {
+      final container = ProviderContainer();
+      addTearDown(container.dispose);
+
+      expect(container.read(isAuthenticatedProvider), isFalse);
+      expect(container.read(currentUserProvider), isNull);
+    });
   });
 
   group('Widget UI Smoke test with Riverpod', () {
@@ -308,10 +327,27 @@ void main() {
       ActiveConsentIdNotifier.enablePersistence = true;
     });
 
-    testWidgets('SetthiApp launches and renders under Riverpod ProviderScope', (WidgetTester tester) async {
+    testWidgets('SetthiApp launches and renders AuthScreen when unauthenticated', (WidgetTester tester) async {
       await tester.pumpWidget(
         const ProviderScope(
           child: SetthiApp(),
+        ),
+      );
+
+      expect(find.text('Setthi'), findsOneWidget);
+      expect(find.text('Next-Gen Financial Intelligence'), findsOneWidget);
+      expect(find.text('Sign In'), findsOneWidget);
+      expect(find.text('Create Account'), findsOneWidget);
+      expect(find.text('Continue with Google'), findsOneWidget);
+    });
+
+    testWidgets('SetthiApp launches and renders TransactionFeedScreen when authenticated', (WidgetTester tester) async {
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            isAuthenticatedProvider.overrideWithValue(true),
+          ],
+          child: const SetthiApp(),
         ),
       );
 
@@ -321,9 +357,74 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('Setu AA ReBIT Gateway'), findsOneWidget);
-      expect(find.text('Link Bank'), findsOneWidget);
+      expect(find.text('Link Bank'), findsWidgets);
       expect(find.text('TOTAL AVAILABLE BALANCE'), findsOneWidget);
       expect(find.text('No Bank Account Linked'), findsOneWidget);
+    });
+
+    testWidgets('VerifyEmailScreen renders 6-digit input boxes and action button', (WidgetTester tester) async {
+      await tester.pumpWidget(
+        const ProviderScope(
+          child: MaterialApp(
+            home: VerifyEmailScreen(email: 'testuser@example.com'),
+          ),
+        ),
+      );
+
+      expect(find.text('Verify Email'), findsOneWidget);
+      expect(find.textContaining('testuser@example.com'), findsOneWidget);
+      expect(find.text('Verify Code'), findsOneWidget);
+      expect(find.textContaining("Didn't receive the code?"), findsOneWidget);
+    });
+
+    testWidgets('DpcFloatingNavDock renders quick actions and handles link bank tap', (WidgetTester tester) async {
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            isAuthenticatedProvider.overrideWithValue(true),
+          ],
+          child: const SetthiApp(),
+        ),
+      );
+
+      await tester.pumpAndSettle();
+
+      // Verify Dock items: Feed, Sync, Link Bank
+      expect(find.text('Feed'), findsOneWidget);
+      expect(find.byIcon(Icons.sync_rounded), findsOneWidget);
+      final dockLinkBank = find.descendant(
+        of: find.byType(DpcFloatingNavDock),
+        matching: find.text('Link Bank'),
+      );
+      expect(dockLinkBank, findsOneWidget);
+
+      // Tap 'Link Bank' action on floating dock to open link bank bottom sheet
+      await tester.tap(dockLinkBank);
+      await tester.pumpAndSettle();
+
+      // Verify Setu AA Consent Flow bottom sheet opened
+      expect(find.text('Link Bank via Account Aggregator'), findsOneWidget);
+      expect(find.text('Setu AA ReBIT Gateway (RBI Regulated)'), findsOneWidget);
+    });
+
+    testWidgets('Tapping Skip for now on AuthScreen bypasses auth to TransactionFeedScreen', (WidgetTester tester) async {
+      await tester.pumpWidget(
+        const ProviderScope(
+          child: SetthiApp(),
+        ),
+      );
+
+      await tester.pumpAndSettle();
+
+      // On AuthScreen, find Skip for now button and tap it
+      final skipBtn = find.text('Skip for now');
+      expect(skipBtn, findsOneWidget);
+      await tester.tap(skipBtn);
+      await tester.pumpAndSettle();
+
+      // Should now be on TransactionFeedScreen
+      expect(find.text('TOTAL AVAILABLE BALANCE'), findsOneWidget);
+      expect(find.text('Setu AA ReBIT Gateway'), findsOneWidget);
     });
   });
 }

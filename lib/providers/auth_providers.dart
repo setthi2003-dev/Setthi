@@ -1,0 +1,46 @@
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import '../services/auth_service.dart';
+
+/// Provider for the [AuthService] instance
+final authServiceProvider = Provider<AuthService>((ref) {
+  return AuthService();
+});
+
+/// Stream provider listening to Supabase auth state changes
+final authStateChangesProvider = StreamProvider<AuthState>((ref) {
+  final service = ref.watch(authServiceProvider);
+  return service.authStateChanges;
+});
+
+/// Derived provider exposing the current authenticated [User]
+final currentUserProvider = Provider<User?>((ref) {
+  final authStateAsync = ref.watch(authStateChangesProvider);
+  final sessionUser = authStateAsync.value?.session?.user;
+  if (sessionUser != null) return sessionUser;
+
+  // Fallback to currently cached user in the auth service
+  final service = ref.watch(authServiceProvider);
+  return service.currentUser;
+});
+
+/// State notifier allowing developers/users to bypass auth for UI development
+class AuthBypassNotifier extends Notifier<bool> {
+  @override
+  bool build() => false;
+
+  void bypass() => state = true;
+  void reset() => state = false;
+}
+
+final authBypassProvider =
+    NotifierProvider<AuthBypassNotifier, bool>(AuthBypassNotifier.new);
+
+/// Boolean provider indicating whether the user is currently authenticated
+final isAuthenticatedProvider = Provider<bool>((ref) {
+  final isBypassed = ref.watch(authBypassProvider);
+  if (isBypassed) return true;
+
+  final user = ref.watch(currentUserProvider);
+  return user != null;
+});

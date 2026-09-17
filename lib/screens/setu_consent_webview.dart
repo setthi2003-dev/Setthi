@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:webview_flutter/webview_flutter.dart';
+import '../config/dpc_tokens.dart';
 import '../config/setu_config.dart';
 import '../services/setu_aa_service.dart';
 
@@ -39,7 +40,7 @@ class _SetuConsentWebViewState extends State<SetuConsentWebView> {
   void _initWebViewController() {
     _controller = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
-      ..setBackgroundColor(const Color(0xFF0F1015))
+      ..setBackgroundColor(DpcColors.bgOled)
       ..setNavigationDelegate(
         NavigationDelegate(
           onProgress: (progress) {
@@ -156,24 +157,24 @@ class _SetuConsentWebViewState extends State<SetuConsentWebView> {
         }
       },
       child: Scaffold(
-        backgroundColor: const Color(0xFF0F1015),
+        backgroundColor: DpcColors.bgOled,
         appBar: AppBar(
-          backgroundColor: const Color(0xFF0F1015),
+          backgroundColor: DpcColors.bgOled,
           elevation: 0,
           leading: IconButton(
-            icon: const Icon(Icons.close_rounded, color: Colors.white),
+            icon: const Icon(Icons.close_rounded, color: DpcColors.textPrimary),
             onPressed: _handleClose,
           ),
           titleSpacing: 0,
           title: Row(
             children: [
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                 decoration: BoxDecoration(
-                  color: const Color(0xFF00FFA3).withValues(alpha: 0.15),
-                  borderRadius: BorderRadius.circular(8),
+                  color: DpcColors.surfaceDark,
+                  borderRadius: BorderRadius.circular(10),
                   border: Border.all(
-                    color: const Color(0xFF00FFA3).withValues(alpha: 0.35),
+                    color: DpcColors.surfaceBorder,
                   ),
                 ),
                 child: const Row(
@@ -181,16 +182,16 @@ class _SetuConsentWebViewState extends State<SetuConsentWebView> {
                   children: [
                     Icon(
                       Icons.lock_outline_rounded,
-                      color: Color(0xFF00FFA3),
+                      color: DpcColors.accentPositive,
                       size: 13,
                     ),
-                    SizedBox(width: 5),
+                    SizedBox(width: 6),
                     Text(
                       'Setu AA 256-bit Secure',
                       style: TextStyle(
-                        color: Color(0xFF00FFA3),
+                        color: DpcColors.accentPositive,
                         fontSize: 11,
-                        fontWeight: FontWeight.w600,
+                        fontWeight: FontWeight.w700,
                       ),
                     ),
                   ],
@@ -200,7 +201,7 @@ class _SetuConsentWebViewState extends State<SetuConsentWebView> {
           ),
           actions: [
             IconButton(
-              icon: const Icon(Icons.refresh_rounded, color: Colors.white70),
+              icon: const Icon(Icons.refresh_rounded, color: DpcColors.textSecondary),
               onPressed: () => _controller.reload(),
             ),
             const SizedBox(width: 4),
@@ -210,9 +211,9 @@ class _SetuConsentWebViewState extends State<SetuConsentWebView> {
                   preferredSize: const Size.fromHeight(2),
                   child: LinearProgressIndicator(
                     value: _loadingProgress / 100.0,
-                    backgroundColor: const Color(0xFF1E202B),
+                    backgroundColor: DpcColors.surfaceTrack,
                     valueColor: const AlwaysStoppedAnimation<Color>(
-                      Color(0xFF00FFA3),
+                      DpcColors.accentPositive,
                     ),
                   ),
                 )
