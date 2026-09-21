@@ -3,8 +3,9 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import '../config/setu_config.dart';
+import '../config/supabase_config.dart';
 import '../models/transaction_model.dart';
-import 'fi_data_service.dart';
+import 'supabase_db_service.dart';
 
 /// Custom exception for Setu Account Aggregator API errors
 class SetuApiException implements Exception {
@@ -27,27 +28,58 @@ class SetuNoConsentException implements Exception {
   String toString() => 'SetuNoConsentException: $message';
 }
 
-/// Production & Sandbox implementation of Setu Account Aggregator Gateway
-class SetuAaService implements TransactionRepository {
+/// Thrown when an Account Aggregator consent has expired or reached maximum allowed usages
+class SetuConsentExpiredException extends SetuApiException {
+  SetuConsentExpiredException(
+    super.message, {
+    super.statusCode,
+    super.responseBody,
+  });
+
+  @override
+  String toString() => 'SetuConsentExpiredException: $message';
+}
+
+/// Client-side handler for Setu Account Aggregator Gateway consent flows
+class SetuAaService {
   static String? lastCreatedConsentId;
+
+  /// Stores the exact data range used when creating the consent, so we can
+  /// reuse it for the data session without relying on JSON-path guesswork.
+  static Map<String, String>? lastCreatedConsentDataRange;
+
   final http.Client _client;
+  final SupabaseDbService? dbService;
   String? activeConsentId;
 
   SetuAaService({
     http.Client? client,
+    this.dbService,
     this.activeConsentId,
   }) : _client = client ?? http.Client();
 
   /// 1. Create Consent: POST /consents
   /// Initiates an Account Aggregator consent request with Setu ReBIT specification.
+  /// If Supabase is configured, retrieves API credentials securely from Supabase Vault via Edge Function.
   Future<Map<String, String>> createConsent({required String mobileNumber}) async {
+    final db = dbService;
+    if (db != null && SupabaseConfig.isConfigured) {
+      final result = await db.createConsentViaBackend(mobileNumber: mobileNumber);
+      lastCreatedConsentId = result['consentId'];
+      return result;
+    }
+
     final uri = Uri.parse('${SetuConfig.baseUrl}/v2/consents');
 
-    final cleanPhone = mobileNumber.replaceAll(RegExp(r'\D'), '');
+    var cleanPhone = mobileNumber.replaceAll(RegExp(r'\D'), '');
+    if (cleanPhone.length == 12 && cleanPhone.startsWith('91')) {
+      cleanPhone = cleanPhone.substring(2);
+    }
     final vua = cleanPhone.contains('@') ? cleanPhone : '$cleanPhone@onemoney';
 
     final now = DateTime.now().toUtc();
-    final fromDate = '2020-01-01T00:00:00Z';
+    // Use 2020-01-01 start to cover historical records & Setu UAT/sandbox mock transactions (2021-2024)
+    const fromDate = '2020-01-01T00:00:00Z';
     final toDate = now.toIso8601String();
 
     final body = jsonEncode({
@@ -83,6 +115,7 @@ class SetuAaService implements TransactionRepository {
       }
 
       lastCreatedConsentId = consentId;
+      lastCreatedConsentDataRange = {'from': fromDate, 'to': toDate};
 
       return {
         'consentId': consentId,
@@ -99,7 +132,13 @@ class SetuAaService implements TransactionRepository {
 
   /// 2. Check Consent Status: GET /consents/:id
   /// Returns status: "PENDING", "ACTIVE", "REJECTED", "EXPIRED", etc.
+  /// If Supabase is configured, queries Setu via Supabase Vault Edge Function.
   Future<String> checkConsentStatus(String consentId) async {
+    final db = dbService;
+    if (db != null && SupabaseConfig.isConfigured) {
+      return db.checkConsentStatusViaBackend(consentId: consentId);
+    }
+
     final uri = Uri.parse('${SetuConfig.baseUrl}/v2/consents/$consentId');
 
     final response = await _client.get(
@@ -117,161 +156,6 @@ class SetuAaService implements TransactionRepository {
         responseBody: response.body,
       );
     }
-  }
-
-  /// 3. Create Data Session: POST /sessions
-  /// Creates an encrypted data session using an approved consent ID.
-  Future<String> createDataSession(String consentId) async {
-    final uri = Uri.parse('${SetuConfig.baseUrl}/v2/sessions');
-
-    // Inspect the approved consent's allowed dataRange to ensure full compatibility
-    Map<String, String> dataRange = {
-      'from': '2020-01-01T00:00:00.000Z',
-      'to': DateTime.now().toUtc().toIso8601String(),
-    };
-
-    try {
-      final consentUri =
-          Uri.parse('${SetuConfig.baseUrl}/v2/consents/$consentId');
-      final cRes =
-          await _client.get(consentUri, headers: SetuConfig.authHeaders);
-      if (cRes.statusCode >= 200 && cRes.statusCode < 300) {
-        final cJson = jsonDecode(cRes.body) as Map<String, dynamic>;
-        final detail = cJson['detail'] as Map<String, dynamic>?;
-        final cRange = detail?['dataRange'] as Map<String, dynamic>?;
-        if (cRange != null && cRange['from'] != null && cRange['to'] != null) {
-          dataRange = {
-            'from': cRange['from'].toString(),
-            'to': cRange['to'].toString(),
-          };
-        }
-      }
-    } catch (_) {}
-
-    // Candidate date ranges to ensure compatibility with both historical (2021-2024) and recent consents
-    final candidateRanges = [
-      dataRange,
-      {
-        'from': '2021-01-01T00:00:00.000Z',
-        'to': '2024-12-31T23:59:59.000Z',
-      },
-      {
-        'from': '2020-01-01T00:00:00.000Z',
-        'to': '2024-12-31T23:59:59.000Z',
-      },
-    ];
-
-    String lastError = 'Failed to create data session';
-
-    for (final range in candidateRanges) {
-      final body = jsonEncode({
-        'consentId': consentId,
-        'dataRange': range,
-        'format': 'json',
-      });
-
-      const maxSessionRetries = 4;
-      for (int attempt = 1; attempt <= maxSessionRetries; attempt++) {
-        debugPrint(
-          '[Setu AA] Creating data session for $consentId (${range['from']} to ${range['to']}, attempt $attempt)...',
-        );
-        final response = await _client.post(
-          uri,
-          headers: SetuConfig.authHeaders,
-          body: body,
-        );
-
-        debugPrint(
-          '[Setu AA] Data session response ($attempt): ${response.statusCode} -> ${response.body}',
-        );
-
-        if (response.statusCode >= 200 && response.statusCode < 300) {
-          final data = jsonDecode(response.body) as Map<String, dynamic>;
-          final sessionId = data['id']?.toString() ?? '';
-          if (sessionId.isNotEmpty) {
-            return sessionId;
-          }
-        }
-
-        lastError = response.body;
-
-        // If range mismatch, break out immediately to try next range
-        if (response.body.contains('not within the consent') ||
-            response.body.contains('FIDataRange')) {
-          debugPrint(
-            '[Setu AA] Date range was outside consent FIDataRange. Trying fallback range...',
-          );
-          break;
-        }
-
-        // If "Consent artefact not ready" or "PENDING", wait and retry
-        if (response.body.contains('not ready') ||
-            response.body.contains('PENDING')) {
-          if (attempt < maxSessionRetries) {
-            debugPrint(
-              '[Setu AA] Consent artefact not ready yet. Waiting 2s before retry...',
-            );
-            await Future.delayed(const Duration(milliseconds: 2000));
-            continue;
-          }
-        }
-
-        break;
-      }
-    }
-
-    throw SetuApiException('Failed to create data session: $lastError');
-  }
-
-  /// 4. Fetch Decrypted FI Data: GET /sessions/:id
-  /// Polls the data session until completed and parses ReBIT deposit transactions.
-  Future<List<BankTransaction>> fetchSessionData(String sessionId) async {
-    final uri = Uri.parse('${SetuConfig.baseUrl}/v2/sessions/$sessionId');
-
-    const maxRetries = 10;
-    const retryDelay = Duration(milliseconds: 2500);
-
-    for (int attempt = 1; attempt <= maxRetries; attempt++) {
-      debugPrint(
-        '[Setu AA] Polling data session $sessionId (attempt $attempt/$maxRetries)...',
-      );
-      final response = await _client.get(
-        uri,
-        headers: SetuConfig.authHeaders,
-      );
-
-      if (response.statusCode < 200 || response.statusCode >= 300) {
-        throw SetuApiException(
-          'Failed to retrieve session data on attempt $attempt: ${response.body}',
-          statusCode: response.statusCode,
-          responseBody: response.body,
-        );
-      }
-
-      final json = jsonDecode(response.body) as Map<String, dynamic>;
-      final status = (json['status']?.toString() ?? '').toUpperCase();
-      debugPrint('[Setu AA] Data session $sessionId status: $status');
-
-      if (status == 'COMPLETED' || status == 'PARTIAL') {
-        debugPrint('[Setu AA] Decrypted FI Data received!');
-        return parseRebitPayload(json);
-      } else if (status == 'FAILED') {
-        throw SetuApiException(
-          'Setu AA data fetch session failed with status FAILED',
-          statusCode: response.statusCode,
-          responseBody: json,
-        );
-      }
-
-      // If PENDING, wait and poll again
-      if (attempt < maxRetries) {
-        await Future.delayed(retryDelay);
-      }
-    }
-
-    throw SetuApiException(
-      'Setu data session polling timed out after $maxRetries attempts.',
-    );
   }
 
   /// Extracts and parses ReBIT deposit transactions from Setu's decrypted JSON
@@ -386,35 +270,5 @@ class SetuAaService implements TransactionRepository {
 
     debugPrint('[Setu AA] Successfully parsed ${results.length} bank transactions!');
     return results;
-  }
-
-  Future<List<BankTransaction>>? _inFlightFetch;
-
-  /// Implementation of [TransactionRepository]
-  @override
-  Future<List<BankTransaction>> fetchTransactions() {
-    final inFlight = _inFlightFetch;
-    if (inFlight != null) {
-      debugPrint('[Setu AA] Sharing in-flight fetchTransactions call.');
-      return inFlight;
-    }
-
-    final future = _executeFetchTransactions();
-    _inFlightFetch = future;
-    return future.whenComplete(() {
-      _inFlightFetch = null;
-    });
-  }
-
-  Future<List<BankTransaction>> _executeFetchTransactions() async {
-    final consentId = activeConsentId;
-    if (consentId == null || consentId.isEmpty) {
-      throw SetuNoConsentException(
-        'No active Account Aggregator consent found. Please link your bank account first.',
-      );
-    }
-
-    final sessionId = await createDataSession(consentId);
-    return fetchSessionData(sessionId);
   }
 }

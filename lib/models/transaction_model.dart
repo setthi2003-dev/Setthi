@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'merchant_category_model.dart';
 
 /// Transaction type conforming to ReBIT deposit schema (DEBIT or CREDIT)
 enum TransactionType {
@@ -25,6 +26,8 @@ class BankTransaction {
   final double currentBalance;
   final DateTime transactionTimestamp;
   final String narration;
+  final String? category;
+  final String? precomputedMerchantName;
 
   const BankTransaction({
     required this.txnId,
@@ -34,67 +37,72 @@ class BankTransaction {
     required this.currentBalance,
     required this.transactionTimestamp,
     required this.narration,
+    this.category,
+    this.precomputedMerchantName,
   });
 
   bool get isCredit => type == TransactionType.credit;
   bool get isDebit => type == TransactionType.debit;
 
   /// Helper getter: Extracts recognizable merchant/counterparty names from
-  /// cryptic Indian UPI/banking narrations (e.g., "UPI/4293021984/Swiggy/swiggy@icici/Payment")
+  /// cryptic Indian UPI/banking narrations dynamically using the database registry.
   String get cleanMerchantName {
-    final lower = narration.toLowerCase();
-
-    // High-priority known Indian Gen-Z merchants & keywords
-    if (lower.contains('swiggy')) return 'Swiggy';
-    if (lower.contains('zomato')) return 'Zomato';
-    if (lower.contains('zepto')) return 'Zepto';
-    if (lower.contains('blinkit') || lower.contains('grofers')) return 'Blinkit';
-    if (lower.contains('instamart')) return 'Instamart';
-    if (lower.contains('netflix')) return 'Netflix';
-    if (lower.contains('spotify')) return 'Spotify';
-    if (lower.contains('uber')) return 'Uber';
-    if (lower.contains('rapido')) return 'Rapido';
-    if (lower.contains('ola')) return 'Ola';
-    if (lower.contains('splitwise')) return 'Splitwise';
-    if (lower.contains('starbucks')) return 'Starbucks';
-    if (lower.contains('blue tokai') || lower.contains('bluetokai')) return 'Blue Tokai';
-    if (lower.contains('third wave') || lower.contains('thirdwave')) return 'Third Wave Coffee';
-    if (lower.contains('bookmyshow') || lower.contains('bms')) return 'BookMyShow';
-    if (lower.contains('amazon') || lower.contains('amzn')) return 'Amazon';
-    if (lower.contains('myntra')) return 'Myntra';
-    if (lower.contains('cult.fit') || lower.contains('curefit')) return 'Cult.fit';
-    if (lower.contains('apple')) return 'Apple Services';
-    if (lower.contains('google') || lower.contains('play store')) return 'Google Play';
-    if (lower.contains('salary') || lower.contains('payroll') || lower.contains('stipend')) {
-      return 'Salary / Stipend';
+    if (precomputedMerchantName != null && precomputedMerchantName!.trim().isNotEmpty) {
+      return precomputedMerchantName!;
     }
 
-    // Generic heuristic for UPI format: UPI/<ref>/<Merchant>/<vpa>/<remark>
-    if (narration.toUpperCase().startsWith('UPI')) {
+    // 1. Dynamic lookup against MerchantCategoryRegistry (from Supabase table)
+    final matchedRule = MerchantCategoryRegistry.instance.findMatch(narration);
+    if (matchedRule != null) {
+      return matchedRule.cleanName;
+    }
+
+    // Set of common banking mode and status codes to ignore as merchant names
+    const ignoredTokens = {
+      'UPI', 'CARD', 'CASH', 'NEFT', 'RTGS', 'IMPS', 'ATM', 'POS',
+      'ACH', 'ECS', 'NACH', 'CR', 'DR', 'DE', 'WD', 'CW', 'FT',
+      'P2A', 'P2P', 'TRF', 'BIL', 'INB', 'MB', 'MOB', 'REV', 'RET',
+      'CHQ', 'CLR', 'PAYMENT', 'TRANSFER', 'PURCHASE', 'DEPOSIT',
+      'WITHDRAWAL', 'SETU', 'REFUND', 'BANK',
+    };
+
+    // 2. Structured slash-separated Indian banking narrations:
+    // e.g. "CARD/DE/995415932503/Amira Salvi/ANIJ/08764285"
+    //      "CASH/CR/467366268432/Sara Dave/ZTAE/35521479"
+    //      "UPI/4293021984/Swiggy/swiggy@icici/Payment"
+    if (narration.contains('/')) {
       final segments = narration.split('/');
-      if (segments.length >= 3) {
-        final candidate = segments[2].trim();
-        if (candidate.isNotEmpty && !candidate.contains(RegExp(r'^[0-9]+$'))) {
-          return _capitalizeWords(candidate);
+      for (final rawSegment in segments) {
+        var candidate = rawSegment.trim();
+        if (candidate.isEmpty) continue;
+        if (RegExp(r'^[0-9]+$').hasMatch(candidate)) continue;
+        if (ignoredTokens.contains(candidate.toUpperCase())) continue;
+
+        // If it's a VPA handle like name@bank, extract the prefix
+        if (candidate.contains('@')) {
+          candidate = candidate.split('@').first.trim();
         }
-      }
-      if (segments.length >= 4) {
-        final candidate = segments[3].split('@').first.trim();
-        if (candidate.isNotEmpty) {
+
+        // Check if candidate contains alphabetic letters and is meaningful
+        if (RegExp(r'[a-zA-Z]').hasMatch(candidate) && candidate.length >= 3) {
           return _capitalizeWords(candidate);
         }
       }
     }
 
-    // Fallback: clean up special characters and numbers
+    // 3. Fallback: clean up special characters and numbers, excluding banking codes
     final sanitized = narration
         .replaceAll(RegExp(r'[0-9]+'), '')
         .replaceAll(RegExp(r'[/_\-]'), ' ')
         .trim();
     if (sanitized.isNotEmpty) {
-      final firstTokens = sanitized.split(' ').where((s) => s.length > 2).take(2).join(' ');
-      if (firstTokens.isNotEmpty) {
-        return _capitalizeWords(firstTokens);
+      final tokens = sanitized
+          .split(RegExp(r'\s+'))
+          .where((s) => s.length > 2 && !ignoredTokens.contains(s.toUpperCase()))
+          .take(2)
+          .join(' ');
+      if (tokens.isNotEmpty) {
+        return _capitalizeWords(tokens);
       }
     }
 
@@ -137,6 +145,15 @@ class BankTransaction {
         return '${transactionTimestamp.day} $monthStr ${transactionTimestamp.year}, $timeStr';
       }
     }
+  }
+
+  /// Helper getter: Short time string e.g. "2:38 PM"
+  String get formattedTime {
+    final hour = transactionTimestamp.hour;
+    final minute = transactionTimestamp.minute.toString().padLeft(2, '0');
+    final period = hour >= 12 ? 'PM' : 'AM';
+    final formattedHour = hour % 12 == 0 ? 12 : hour % 12;
+    return '$formattedHour:$minute $period';
   }
 
   /// Category or grouping key for Section Headers ("Today", "Yesterday", "Earlier this week", "Last week", "Earlier this month")
@@ -282,6 +299,19 @@ class BankTransaction {
       balance = fallbackBalance;
     }
 
+    final matchedRule = MerchantCategoryRegistry.instance.findMatch(rawNarration);
+    final parsedCategory = json['category'] ?? json['Category'];
+    final finalCategory = parsedCategory != null
+        ? parsedCategory.toString()
+        : matchedRule?.category; // null if unmatched
+
+    final parsedCleanName = json['clean_merchant_name'] ??
+        json['cleanMerchantName'] ??
+        json['clean_name'];
+    final finalCleanName = parsedCleanName != null
+        ? parsedCleanName.toString()
+        : matchedRule?.cleanName;
+
     return BankTransaction(
       txnId: rawTxnId,
       type: TransactionType.fromString(rawType),
@@ -290,6 +320,8 @@ class BankTransaction {
       currentBalance: balance,
       transactionTimestamp: _parseDateTime(rawTime),
       narration: rawNarration,
+      category: finalCategory,
+      precomputedMerchantName: finalCleanName,
     );
   }
 
@@ -302,6 +334,32 @@ class BankTransaction {
       'currentBalance': currentBalance,
       'transactionTimestamp': transactionTimestamp.toIso8601String(),
       'narration': narration,
+      if (category != null) 'category': category,
+      'clean_merchant_name': cleanMerchantName,
     };
+  }
+
+  BankTransaction copyWith({
+    String? txnId,
+    TransactionType? type,
+    String? mode,
+    double? amount,
+    double? currentBalance,
+    DateTime? transactionTimestamp,
+    String? narration,
+    String? category,
+    String? precomputedMerchantName,
+  }) {
+    return BankTransaction(
+      txnId: txnId ?? this.txnId,
+      type: type ?? this.type,
+      mode: mode ?? this.mode,
+      amount: amount ?? this.amount,
+      currentBalance: currentBalance ?? this.currentBalance,
+      transactionTimestamp: transactionTimestamp ?? this.transactionTimestamp,
+      narration: narration ?? this.narration,
+      category: category ?? this.category,
+      precomputedMerchantName: precomputedMerchantName ?? this.precomputedMerchantName,
+    );
   }
 }

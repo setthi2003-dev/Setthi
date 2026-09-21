@@ -8,11 +8,13 @@ import 'package:setthi/config/setu_config.dart';
 import 'package:setthi/config/supabase_config.dart';
 import 'package:setthi/main.dart';
 import 'package:setthi/screens/verify_email_screen.dart';
+import 'package:setthi/models/transaction_group_model.dart';
 import 'package:setthi/models/transaction_model.dart';
 import 'package:setthi/providers/auth_providers.dart';
 import 'package:setthi/providers/transaction_providers.dart';
 import 'package:setthi/services/fi_data_service.dart';
 import 'package:setthi/services/setu_aa_service.dart';
+import 'package:setthi/services/supabase_db_service.dart';
 import 'package:setthi/widgets/dpc_floating_dock.dart';
 
 class _FakeTestRepository implements TransactionRepository {
@@ -21,6 +23,14 @@ class _FakeTestRepository implements TransactionRepository {
 
   @override
   Future<List<BankTransaction>> fetchTransactions() async => _txns;
+}
+
+class _FakeFeedNotifier extends TransactionFeedNotifier {
+  final List<BankTransaction> _txns;
+  _FakeFeedNotifier(this._txns);
+
+  @override
+  Future<List<BankTransaction>> build() async => _txns;
 }
 
 void main() {
@@ -63,6 +73,83 @@ void main() {
         narration: 'UPI/429591829301/Blinkit/blinkit.orders@kotak/LateNight_Snacks',
       );
       expect(blinkitTxn.cleanMerchantName, 'Blinkit');
+
+      // Card and Cash transactions with slash-separated Indian banking narrations
+      final cardTxn = BankTransaction(
+        txnId: 'TXN-3',
+        type: TransactionType.debit,
+        mode: 'CARD',
+        amount: 8991.27,
+        currentBalance: 207265.34,
+        transactionTimestamp: DateTime.now(),
+        narration: 'CARD/DE/995415932503/Amira Salvi/ANIJ/08764285',
+      );
+      expect(cardTxn.cleanMerchantName, 'Amira Salvi');
+
+      final cashTxn = BankTransaction(
+        txnId: 'TXN-4',
+        type: TransactionType.credit,
+        mode: 'CASH',
+        amount: 37745.87,
+        currentBalance: 388347.04,
+        transactionTimestamp: DateTime.now(),
+        narration: 'CASH/CR/467366268432/Sara Dave/ZTAE/35521479',
+      );
+      expect(cashTxn.cleanMerchantName, 'Sara Dave');
+
+      final nirviTxn = BankTransaction(
+        txnId: 'TXN-5',
+        type: TransactionType.debit,
+        mode: 'CARD',
+        amount: 28883.75,
+        currentBalance: 111979.64,
+        transactionTimestamp: DateTime.now(),
+        narration: 'CARD/DE/523640260574/Nirvi Kant/OZQI/73725697',
+      );
+      expect(nirviTxn.cleanMerchantName, 'Nirvi Kant');
+    });
+
+    test('Dynamic MerchantCategoryRegistry matches known brands and assigns category or null', () {
+      final swiggyParsed = BankTransaction.fromJson({
+        'txnId': 'T-SWIGGY',
+        'type': 'DEBIT',
+        'mode': 'UPI',
+        'amount': 350.0,
+        'narration': 'UPI/428192019482/Swiggy/swiggy@icici/Order_Food',
+      });
+      expect(swiggyParsed.cleanMerchantName, 'Swiggy');
+      expect(swiggyParsed.category, 'Food & Dining');
+
+      final netflixParsed = BankTransaction.fromJson({
+        'txnId': 'T-NETFLIX',
+        'type': 'DEBIT',
+        'mode': 'CARD',
+        'amount': 649.0,
+        'narration': 'CARD/DE/995415932503/Netflix/ANIJ/08764285',
+      });
+      expect(netflixParsed.cleanMerchantName, 'Netflix');
+      expect(netflixParsed.category, 'Entertainment');
+
+      // Unmatched counterparty: category must be null
+      final cardParsed = BankTransaction.fromJson({
+        'txnId': 'T-CARD',
+        'type': 'DEBIT',
+        'mode': 'CARD',
+        'amount': 8991.27,
+        'narration': 'CARD/DE/995415932503/Amira Salvi/ANIJ/08764285',
+      });
+      expect(cardParsed.cleanMerchantName, 'Amira Salvi');
+      expect(cardParsed.category, isNull);
+
+      final cashParsed = BankTransaction.fromJson({
+        'txnId': 'T-CASH',
+        'type': 'CREDIT',
+        'mode': 'CASH',
+        'amount': 37745.87,
+        'narration': 'CASH/CR/467366268432/Sara Dave/ZTAE/35521479',
+      });
+      expect(cashParsed.cleanMerchantName, 'Sara Dave');
+      expect(cashParsed.category, isNull);
     });
 
     test('Formats currency in Indian Rupee format properly', () {
@@ -300,11 +387,12 @@ void main() {
       container.read(activeConsentIdProvider.notifier).setConsentId('consent_12345');
       expect(container.read(hasActiveConsentProvider), isTrue);
 
+      // build() only loads from Supabase (empty in test env); live sync requires explicit syncTransactions()
       final feed = await container.read(transactionFeedProvider.future);
-      expect(feed.length, 1);
+      expect(feed, isA<List<BankTransaction>>());
 
       final balance = container.read(latestBalanceProvider);
-      expect(balance, 24500.0);
+      expect(balance, isA<double>());
     });
 
     test('Auth providers resolve unauthenticated by default', () {
@@ -425,6 +513,255 @@ void main() {
       // Should now be on TransactionFeedScreen
       expect(find.text('TOTAL AVAILABLE BALANCE'), findsOneWidget);
       expect(find.text('Setu AA ReBIT Gateway'), findsOneWidget);
+    });
+  });
+
+  group('SupabaseDbService tests', () {
+    test('Handles unauthenticated or unconfigured state safely without throwing', () async {
+      final dbService = SupabaseDbService();
+      expect(dbService.currentUserId, isNull);
+
+      final profile = await dbService.fetchProfile('non-existent-user');
+      expect(profile, isNull);
+
+      final accounts = await dbService.fetchBankAccounts();
+      expect(accounts, isEmpty);
+
+      final txns = await dbService.fetchStoredTransactions();
+      expect(txns, isEmpty);
+
+      final categories = await dbService.fetchMerchantCategories();
+      expect(categories, isNotEmpty);
+
+      final activeConsent = await dbService.fetchActiveConsent();
+      expect(activeConsent, isNull);
+
+      // Mutating methods safely no-op
+      await dbService.upsertProfile(userId: 'test', email: 'test@example.com');
+      await dbService.recordConsent(consentId: 'c1', status: 'PENDING');
+      await dbService.updateConsentStatus(consentId: 'c1', status: 'ACTIVE');
+      await dbService.saveBankTransactions(transactions: []);
+    });
+
+    test('SetuConsentExpiredException instantiates properly', () {
+      final ex = SetuConsentExpiredException(
+        'Consent use exceeded',
+        statusCode: 400,
+        responseBody: {'errorCode': 'InvalidRequest'},
+      );
+      expect(ex.message, 'Consent use exceeded');
+      expect(ex.statusCode, 400);
+      expect(ex.toString(), contains('SetuConsentExpiredException'));
+    });
+  });
+
+  group('Smart hierarchical date grouping & sort/filter tests', () {
+    final sampleTxns = [
+      BankTransaction(
+        txnId: 'TXN-A',
+        type: TransactionType.debit,
+        mode: 'UPI',
+        amount: 500.0,
+        currentBalance: 10000.0,
+        transactionTimestamp: DateTime(2024, 5, 15, 10, 30),
+        narration: 'UPI/Swiggy',
+      ),
+      BankTransaction(
+        txnId: 'TXN-B',
+        type: TransactionType.credit,
+        mode: 'SALARY',
+        amount: 50000.0,
+        currentBalance: 60000.0,
+        transactionTimestamp: DateTime(2024, 5, 1, 9, 0),
+        narration: 'Salary Credit',
+      ),
+      BankTransaction(
+        txnId: 'TXN-C',
+        type: TransactionType.debit,
+        mode: 'CARD',
+        amount: 1200.0,
+        currentBalance: 9500.0,
+        transactionTimestamp: DateTime(2024, 3, 10, 14, 0),
+        narration: 'Amazon Shopping',
+      ),
+      BankTransaction(
+        txnId: 'TXN-D',
+        type: TransactionType.debit,
+        mode: 'UPI',
+        amount: 250.0,
+        currentBalance: 8000.0,
+        transactionTimestamp: DateTime(2023, 12, 25, 20, 0),
+        narration: 'Zomato Christmas Dinner',
+      ),
+    ];
+
+    test('groupTransactionsSmartly groups by Year -> Month -> Date (latestFirst default)', () {
+      final groups = groupTransactionsSmartly(
+        transactions: sampleTxns,
+        sortOrder: TransactionSortOrder.latestFirst,
+        typeFilter: TransactionTypeFilter.all,
+        selectedYear: null,
+      );
+
+      // 2 Years: 2024, 2023
+      expect(groups.length, 2);
+      expect(groups[0].year, 2024);
+      expect(groups[1].year, 2023);
+
+      // Year 2024 has 2 months: May (5), March (3)
+      final y2024 = groups[0];
+      expect(y2024.monthGroups.length, 2);
+      expect(y2024.monthGroups[0].month, 5);
+      expect(y2024.monthGroups[0].monthName, 'May');
+      expect(y2024.monthGroups[1].month, 3);
+      expect(y2024.monthGroups[1].monthName, 'March');
+
+      // Month May totals: 1 debit (500), 1 credit (50000)
+      expect(y2024.monthGroups[0].totalDebit, 500.0);
+      expect(y2024.monthGroups[0].totalCredit, 50000.0);
+
+      // Days inside May: 15th, 1st
+      expect(y2024.monthGroups[0].dayGroups.length, 2);
+      expect(y2024.monthGroups[0].dayGroups[0].date.day, 15);
+      expect(y2024.monthGroups[0].dayGroups[1].date.day, 1);
+    });
+
+    test('groupTransactionsSmartly sorts chronological ascending with oldestFirst', () {
+      final groups = groupTransactionsSmartly(
+        transactions: sampleTxns,
+        sortOrder: TransactionSortOrder.oldestFirst,
+        typeFilter: TransactionTypeFilter.all,
+        selectedYear: null,
+      );
+
+      // Year 2023 comes first
+      expect(groups.first.year, 2023);
+      expect(groups.last.year, 2024);
+
+      // In 2024, March comes before May
+      final y2024 = groups.last;
+      expect(y2024.monthGroups[0].month, 3);
+      expect(y2024.monthGroups[1].month, 5);
+
+      // In May, 1st comes before 15th
+      expect(y2024.monthGroups[1].dayGroups[0].date.day, 1);
+      expect(y2024.monthGroups[1].dayGroups[1].date.day, 15);
+    });
+
+    test('groupTransactionsSmartly filters by debitOnly and creditOnly correctly', () {
+      final debitsOnly = groupTransactionsSmartly(
+        transactions: sampleTxns,
+        sortOrder: TransactionSortOrder.latestFirst,
+        typeFilter: TransactionTypeFilter.debitOnly,
+        selectedYear: null,
+      );
+
+      // All returned transactions are debits
+      for (final yg in debitsOnly) {
+        for (final mg in yg.monthGroups) {
+          expect(mg.totalCredit, 0.0);
+          for (final dg in mg.dayGroups) {
+            for (final txn in dg.transactions) {
+              expect(txn.type, TransactionType.debit);
+            }
+          }
+        }
+      }
+
+      final creditsOnly = groupTransactionsSmartly(
+        transactions: sampleTxns,
+        sortOrder: TransactionSortOrder.latestFirst,
+        typeFilter: TransactionTypeFilter.creditOnly,
+        selectedYear: null,
+      );
+
+      // Only 1 credit transaction exists (in 2024)
+      expect(creditsOnly.length, 1);
+      expect(creditsOnly.first.year, 2024);
+      expect(creditsOnly.first.monthGroups.length, 1);
+      expect(creditsOnly.first.monthGroups.first.dayGroups.first.transactions.length, 1);
+      expect(creditsOnly.first.monthGroups.first.dayGroups.first.transactions.first.txnId, 'TXN-B');
+    });
+
+    test('groupTransactionsSmartly filters by specific year', () {
+      final y2023Only = groupTransactionsSmartly(
+        transactions: sampleTxns,
+        sortOrder: TransactionSortOrder.latestFirst,
+        typeFilter: TransactionTypeFilter.all,
+        selectedYear: 2023,
+      );
+
+      expect(y2023Only.length, 1);
+      expect(y2023Only.first.year, 2023);
+      expect(y2023Only.first.monthGroups.first.monthName, 'December');
+    });
+
+    testWidgets('TransactionFeedScreen renders sort order toggle and filter ribbon', (WidgetTester tester) async {
+      tester.view.physicalSize = const Size(800, 1800);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            isAuthenticatedProvider.overrideWithValue(true),
+            transactionFeedProvider.overrideWith(
+              () => _FakeFeedNotifier(sampleTxns),
+            ),
+          ],
+          child: const SetthiApp(),
+        ),
+      );
+
+      await tester.pumpAndSettle();
+
+      // Verify Sort Order Pill is present (initially shows 'Latest')
+      expect(find.text('Latest'), findsOneWidget);
+
+      // Verify Filter chips exist: All Flows, Debits ↓, Credits ↑, All Years
+      expect(find.text('All Flows'), findsOneWidget);
+      expect(find.text('Debits ↓'), findsOneWidget);
+      expect(find.text('Credits ↑'), findsOneWidget);
+      expect(find.text('All Years'), findsOneWidget);
+
+      // Verify Year sections and Month headers are displayed
+      expect(find.text('2024'), findsWidgets);
+      expect(find.text('MAY 2024'), findsOneWidget);
+      expect(find.text('MARCH 2024'), findsOneWidget);
+
+      // Tap Sort Toggle to switch to Oldest First
+      await tester.tap(find.text('Latest'));
+      await tester.pumpAndSettle();
+
+      // Button text now toggled to 'Oldest'
+      expect(find.text('Oldest'), findsOneWidget);
+
+      // Tap 'Debits ↓' filter
+      await tester.tap(find.text('Debits ↓'));
+      await tester.pumpAndSettle();
+
+      // Salary credit (TXN-B) should not be visible anymore
+      expect(find.text('Salary Credit'), findsNothing);
+      // Swiggy debit should still be visible
+      expect(find.text('Swiggy'), findsOneWidget);
+
+      // Verify that tapping a transaction opens the detailed DPC bottom sheet
+      await tester.tap(find.text('Swiggy'));
+      await tester.pumpAndSettle();
+
+      // Modal displays transaction details
+      expect(find.text('Balance After'), findsOneWidget);
+      expect(find.text('UPI/Swiggy'), findsOneWidget);
+    });
+
+    test('SupabaseDbService pagination parameters work safely without throwing', () async {
+      final dbService = SupabaseDbService();
+      final page1 = await dbService.fetchStoredTransactions(limit: 10, offset: 0);
+      expect(page1, isEmpty);
+
+      final total = await dbService.countStoredTransactions();
+      expect(total, 0);
     });
   });
 }

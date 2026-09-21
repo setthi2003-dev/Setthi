@@ -2,13 +2,17 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../config/dpc_tokens.dart';
+import '../config/supabase_config.dart';
+import '../models/transaction_group_model.dart';
 import '../models/transaction_model.dart';
 import '../providers/auth_providers.dart';
+import '../providers/supabase_provider.dart';
 import '../providers/transaction_providers.dart';
 import '../widgets/dpc_floating_dock.dart';
-import '../widgets/dpc_gauges.dart';
 import '../widgets/dpc_hero_carousel.dart';
 import '../widgets/dpc_telemetry_cards.dart';
+import '../widgets/slide_to_confirm.dart';
+import '../widgets/bank_sync_permission_sheet.dart';
 import 'setu_consent_webview.dart';
 
 /// Full DPC Redesign of the Setthi Transaction Feed & Telemetry Dashboard.
@@ -29,6 +33,14 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
   final ScrollController _scrollController = ScrollController();
   int _activeNavIndex = 0; // 0: Dashboard (Screen A), 1: Telemetry (Screen B, kept for reference)
   int _telemetryFilterIndex = 0; // Kept for reference
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      ref.read(activeConsentIdProvider.notifier).refreshFromBackend();
+    });
+  }
 
   @override
   void dispose() {
@@ -114,8 +126,6 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
     WidgetRef ref,
     bool hasActiveConsent,
   ) {
-    final balance = ref.watch(latestBalanceProvider);
-
     return AppBar(
       elevation: 0,
       backgroundColor: DpcColors.bgOled,
@@ -124,66 +134,20 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
       title: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          // Left: Pill-shaped currency/resource badge with icon (#38BDF8)
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-            decoration: BoxDecoration(
-              color: DpcColors.surfaceDark,
-              borderRadius: BorderRadius.circular(20),
-              border: Border.all(
-                color: DpcColors.surfaceBorder,
-                width: 1,
-              ),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Container(
-                  width: 18,
-                  height: 18,
-                  decoration: BoxDecoration(
-                    color: DpcColors.accentPrimary.withValues(alpha: 0.18),
-                    shape: BoxShape.circle,
-                  ),
-                  child: const Center(
-                    child: Text(
-                      '₹',
-                      style: TextStyle(
-                        color: DpcColors.accentPrimary,
-                        fontSize: 11,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 6),
-                Text(
-                  BankTransaction.formatRupees(balance),
-                  style: const TextStyle(
-                    color: DpcColors.textPrimary,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: -0.2,
-                  ),
-                ),
-              ],
-            ),
-          ),
-
-          // Center: Setthi Brand
+          // Left: Setthi Brand with live connection dot
           Row(
             mainAxisSize: MainAxisSize.min,
             children: [
               Container(
-                padding: const EdgeInsets.all(5),
+                padding: const EdgeInsets.all(6),
                 decoration: BoxDecoration(
                   gradient: DpcColors.heroPastel1,
-                  borderRadius: BorderRadius.circular(8),
+                  borderRadius: BorderRadius.circular(10),
                 ),
                 child: const Icon(
                   Icons.bolt_rounded,
                   color: DpcColors.textContrast,
-                  size: 15,
+                  size: 16,
                 ),
               ),
               const SizedBox(width: 8),
@@ -191,7 +155,7 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
                 'Setthi',
                 style: TextStyle(
                   color: DpcColors.textPrimary,
-                  fontSize: 18,
+                  fontSize: 20,
                   fontWeight: FontWeight.w800,
                   letterSpacing: -0.6,
                 ),
@@ -199,24 +163,24 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
             ],
           ),
 
-          // Right: Circular level/tier indicator enclosed in active radial progress arc (#F59E0B)
+          // Right: Profile & settings button
           InkWell(
             onTap: () => _showProfileBottomSheet(context, ref),
             borderRadius: BorderRadius.circular(20),
-            child: DpcMiniGauge(
-              progress: hasActiveConsent ? 1.0 : 0.4,
-              size: 34,
-              activeColor: hasActiveConsent
-                  ? DpcColors.accentPositive
-                  : DpcColors.accentLevel,
-              center: Icon(
-                hasActiveConsent
-                    ? Icons.verified_user_rounded
-                    : Icons.person_rounded,
-                size: 15,
-                color: hasActiveConsent
-                    ? DpcColors.accentPositive
-                    : DpcColors.accentLevel,
+            child: Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: DpcColors.surfaceDark,
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color: DpcColors.surfaceBorder,
+                  width: 1,
+                ),
+              ),
+              child: const Icon(
+                Icons.person_outline_rounded,
+                size: 17,
+                color: DpcColors.textSecondary,
               ),
             ),
           ),
@@ -258,7 +222,17 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
   ) {
     final balance = ref.watch(latestBalanceProvider);
     final weeklyStats = ref.watch(weeklyStatsProvider);
-    final grouped = ref.watch(groupedTransactionsProvider);
+    final yearGroups = ref.watch(smartGroupedTransactionsProvider);
+    final sortOrder = ref.watch(transactionSortOrderProvider);
+    final typeFilter = ref.watch(transactionTypeFilterProvider);
+    final selectedYear = ref.watch(transactionSelectedYearProvider);
+    final availableYears = ref.watch(availableYearsProvider);
+    final totalMatchingTxns = yearGroups.fold<int>(
+      0,
+      (acc, y) => acc + y.transactionCount,
+    );
+    final hasMore = ref.watch(hasMoreTransactionsProvider);
+    final isLoadingMore = ref.watch(isLoadingMoreTransactionsProvider);
 
     return CustomScrollView(
       controller: _scrollController,
@@ -268,149 +242,180 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
       slivers: [
         SliverToBoxAdapter(
           child: Padding(
-            padding: const EdgeInsets.fromLTRB(18, 12, 18, 8),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // 1. Prominent Hero Aggregate (Free-floating Display Metric)
-                _buildHeroAggregate(balance, hasActiveConsent),
-                const SizedBox(height: 18),
-
-                // 2. Floating Horizontal Hero Carousel (Pastel cards with #121214 text)
-                _buildHeroCarouselSection(
-                  context,
-                  ref,
-                  hasActiveConsent,
-                  weeklyStats,
-                ),
-                const SizedBox(height: 20),
-
-                // 3. Setu AA Gateway Action Bar
-                _buildActionBar(context, ref, isSyncing, hasActiveConsent),
-                if (transactions.isNotEmpty) ...[
-                  const SizedBox(height: 14),
-                  // 4. Spent vs Inflow Snapshot Strip
-                  _buildWeeklySnapshotStrip(weeklyStats.spent, weeklyStats.inflow),
-                  const SizedBox(height: 20),
-
-                  // 5. Section Header for Feed
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      const Text(
-                        'TRANSACTION FEED',
-                        style: DpcTypography.badgeTag,
-                      ),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 8,
-                          vertical: 3,
-                        ),
-                        decoration: BoxDecoration(
-                          color: DpcColors.surfaceDark,
-                          borderRadius: BorderRadius.circular(10),
-                          border: Border.all(
-                            color: DpcColors.surfaceBorder,
-                            width: 1,
-                          ),
-                        ),
-                        child: Text(
-                          '${transactions.length} Total',
-                          style: const TextStyle(
-                            color: DpcColors.textSecondary,
-                            fontSize: 10,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 10),
-                ],
-              ],
+            padding: const EdgeInsets.fromLTRB(18, 12, 18, 4),
+            child: _buildHeroAggregate(
+              balance,
+              hasActiveConsent,
+              weeklyStats: weeklyStats,
+              isSyncing: isSyncing,
             ),
           ),
         ),
+
+        // 2. Floating Horizontal Hero Carousel (Screen edge-to-edge with peeking affordance)
+        SliverToBoxAdapter(
+          child: Padding(
+            padding: const EdgeInsets.only(top: 14, bottom: 8),
+            child: DpcHeroCarousel(
+              items: _buildHeroCarouselItems(
+                context,
+                ref,
+                hasActiveConsent: hasActiveConsent,
+                weeklyStats: weeklyStats,
+                isSyncing: isSyncing,
+              ),
+            ),
+          ),
+        ),
+
+        if (transactions.isNotEmpty)
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(18, 12, 18, 8),
+              child: _buildFilterAndSortBar(
+                context,
+                ref,
+                totalTransactions: transactions.length,
+                matchingTransactions: totalMatchingTxns,
+                sortOrder: sortOrder,
+                typeFilter: typeFilter,
+                selectedYear: selectedYear,
+                availableYears: availableYears,
+              ),
+            ),
+          ),
 
         // Transactions Feed or Empty State
         if (transactions.isEmpty)
           SliverToBoxAdapter(
             child: _buildEmptyState(context, ref, hasActiveConsent, isSyncing),
           )
+        else if (yearGroups.isEmpty)
+          SliverToBoxAdapter(
+            child: _buildFilterEmptyState(context, ref),
+          )
         else
           SliverPadding(
             padding: const EdgeInsets.symmetric(horizontal: 18),
             sliver: SliverList(
               delegate: SliverChildBuilderDelegate(
-                (context, index) {
-                  final groupKeys = grouped.keys.toList();
-                  final groupTitle = groupKeys[index];
-                  final items = grouped[groupTitle]!;
+                (context, yearIndex) {
+                  final yearGroup = yearGroups[yearIndex];
+                  final showYearHeader = availableYears.length > 1;
 
                   return Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Padding(
-                        padding: const EdgeInsets.only(top: 14, bottom: 8),
-                        child: Row(
-                          children: [
-                            Text(
-                              groupTitle.toUpperCase(),
-                              style: const TextStyle(
-                                color: DpcColors.textSecondary,
-                                fontSize: 11,
-                                fontWeight: FontWeight.w700,
-                                letterSpacing: 1.1,
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: Container(
-                                height: 1,
-                                color: DpcColors.surfaceBorder,
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                            Text(
-                              '${items.length} txns',
-                              style: const TextStyle(
-                                color: DpcColors.textMuted,
-                                fontSize: 11,
-                                fontWeight: FontWeight.w500,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      Container(
-                        decoration: DpcDecorations.cardBase(radius: 18),
-                        child: ListView.separated(
-                          shrinkWrap: true,
-                          physics: const NeverScrollableScrollPhysics(),
-                          padding: const EdgeInsets.symmetric(vertical: 4),
-                          itemCount: items.length,
-                          separatorBuilder: (context, _) => const Divider(
-                            height: 1,
-                            thickness: 1,
-                            color: DpcColors.surfaceBorder,
-                            indent: 68,
-                            endIndent: 16,
+                      // Minimalist Year Header (if multi-year data exists)
+                      if (showYearHeader) ...[
+                        Padding(
+                          padding: EdgeInsets.only(
+                            top: yearIndex == 0 ? 4 : 20,
+                            bottom: 8,
                           ),
-                          itemBuilder: (context, itemIdx) {
-                            return _buildTransactionTile(
-                              context,
-                              items[itemIdx],
-                            );
-                          },
+                          child: Row(
+                            children: [
+                              Text(
+                                '${yearGroup.year}',
+                                style: const TextStyle(
+                                  color: DpcColors.textPrimary,
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w800,
+                                  letterSpacing: 0.5,
+                                ),
+                              ),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: Container(
+                                  height: 1,
+                                  color: DpcColors.surfaceBorder,
+                                ),
+                              ),
+                            ],
+                          ),
                         ),
-                      ),
+                      ],
+
+                      // Months within this Year
+                      for (int mIdx = 0; mIdx < yearGroup.monthGroups.length; mIdx++) ...[
+                        _buildMonthSection(
+                          context,
+                          yearGroup.monthGroups[mIdx],
+                          isFirstInYear: mIdx == 0 && !showYearHeader,
+                        ),
+                      ],
                     ],
                   );
                 },
-                childCount: grouped.keys.length,
+                childCount: yearGroups.length,
               ),
             ),
           ),
+
+        // On-Demand Pagination Footer
+        if (transactions.isNotEmpty)
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 24),
+              child: Center(
+                child: hasMore
+                    ? OutlinedButton.icon(
+                        onPressed: isLoadingMore
+                            ? null
+                            : () => ref
+                                .read(transactionFeedProvider.notifier)
+                                .loadMore(),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: DpcColors.textPrimary,
+                          side: const BorderSide(
+                            color: DpcColors.surfaceBorder,
+                            width: 1,
+                          ),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 20,
+                            vertical: 10,
+                          ),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                        ),
+                        icon: isLoadingMore
+                            ? const SizedBox(
+                                width: 14,
+                                height: 14,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: DpcColors.accentPositive,
+                                ),
+                              )
+                            : const Icon(
+                                Icons.history_rounded,
+                                size: 16,
+                                color: DpcColors.textSecondary,
+                              ),
+                        label: Text(
+                          isLoadingMore
+                              ? 'Loading earlier...'
+                              : 'Load Earlier Transactions',
+                          style: const TextStyle(
+                            color: DpcColors.textSecondary,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      )
+                    : const Text(
+                        'All transactions loaded',
+                        style: TextStyle(
+                          color: DpcColors.textMuted,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+              ),
+            ),
+          ),
+
         const SliverToBoxAdapter(
           child: SizedBox(height: 100), // padding for floating dock
         ),
@@ -418,67 +423,467 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
     );
   }
 
-  /// 1. Prominent Hero Aggregate:
-  /// Free-floating without container constraints as per DPC Rule.
-  Widget _buildHeroAggregate(double balance, bool hasActiveConsent) {
+  /// Timeline Filter & Sort Bar
+  Widget _buildFilterAndSortBar(
+    BuildContext context,
+    WidgetRef ref, {
+    required int totalTransactions,
+    required int matchingTransactions,
+    required TransactionSortOrder sortOrder,
+    required TransactionTypeFilter typeFilter,
+    required int? selectedYear,
+    required List<int> availableYears,
+  }) {
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      physics: const BouncingScrollPhysics(),
+      child: Row(
+        children: [
+          // 1. Latest / Oldest Toggle Chip
+          Material(
+            color: Colors.transparent,
+            child: InkWell(
+              onTap: () {
+                ref.read(transactionSortOrderProvider.notifier).state =
+                    sortOrder == TransactionSortOrder.latestFirst
+                        ? TransactionSortOrder.oldestFirst
+                        : TransactionSortOrder.latestFirst;
+              },
+              borderRadius: BorderRadius.circular(16),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 180),
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                decoration: BoxDecoration(
+                  color: DpcColors.surfaceDark,
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(
+                    color: sortOrder == TransactionSortOrder.latestFirst
+                        ? const Color(0xFF86E3CE).withValues(alpha: 0.5)
+                        : const Color(0xFFFFB3BA).withValues(alpha: 0.5),
+                    width: 1,
+                  ),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      sortOrder == TransactionSortOrder.latestFirst
+                          ? Icons.south_rounded
+                          : Icons.north_rounded,
+                      size: 12,
+                      color: sortOrder == TransactionSortOrder.latestFirst
+                          ? const Color(0xFF86E3CE)
+                          : const Color(0xFFFFB3BA),
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      sortOrder == TransactionSortOrder.latestFirst
+                          ? 'Latest'
+                          : 'Oldest',
+                      style: TextStyle(
+                        color: sortOrder == TransactionSortOrder.latestFirst
+                            ? const Color(0xFF86E3CE)
+                            : const Color(0xFFFFB3BA),
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+
+          Container(
+            width: 1,
+            height: 16,
+            color: DpcColors.surfaceBorder,
+          ),
+          const SizedBox(width: 8),
+
+          // 2. Flow: All Flows
+          _buildFilterChip(
+            label: 'All Flows',
+            isSelected: typeFilter == TransactionTypeFilter.all,
+            onTap: () => ref.read(transactionTypeFilterProvider.notifier).state =
+                TransactionTypeFilter.all,
+          ),
+          const SizedBox(width: 6),
+
+          // 3. Flow: Debits
+          _buildFilterChip(
+            label: 'Debits ↓',
+            isSelected: typeFilter == TransactionTypeFilter.debitOnly,
+            accentColor: const Color(0xFFFF6E7F),
+            onTap: () => ref.read(transactionTypeFilterProvider.notifier).state =
+                TransactionTypeFilter.debitOnly,
+          ),
+          const SizedBox(width: 6),
+
+          // 4. Flow: Credits
+          _buildFilterChip(
+            label: 'Credits ↑',
+            isSelected: typeFilter == TransactionTypeFilter.creditOnly,
+            accentColor: DpcColors.accentPositive,
+            onTap: () => ref.read(transactionTypeFilterProvider.notifier).state =
+                TransactionTypeFilter.creditOnly,
+          ),
+
+          // 5. Years (if multi-year)
+          if (availableYears.length > 1) ...[
+            const SizedBox(width: 8),
+            Container(
+              width: 1,
+              height: 16,
+              color: DpcColors.surfaceBorder,
+            ),
+            const SizedBox(width: 8),
+            _buildFilterChip(
+              label: 'All Years',
+              isSelected: selectedYear == null,
+              onTap: () => ref.read(transactionSelectedYearProvider.notifier).state = null,
+            ),
+            for (final y in availableYears) ...[
+              const SizedBox(width: 6),
+              _buildFilterChip(
+                label: '$y',
+                isSelected: selectedYear == y,
+                accentColor: const Color(0xFFA78BFA),
+                onTap: () => ref.read(transactionSelectedYearProvider.notifier).state = y,
+              ),
+            ],
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildFilterChip({
+    required String label,
+    required bool isSelected,
+    required VoidCallback onTap,
+    Color? accentColor,
+  }) {
+    final effectiveAccent = accentColor ?? DpcColors.accentPositive;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(16),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 180),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+          decoration: BoxDecoration(
+            color: isSelected
+                ? effectiveAccent.withValues(alpha: 0.14)
+                : DpcColors.surfaceDark,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: isSelected
+                  ? effectiveAccent.withValues(alpha: 0.7)
+                  : DpcColors.surfaceBorder,
+              width: 1,
+            ),
+          ),
+          child: Text(
+            label,
+            style: TextStyle(
+              color: isSelected ? effectiveAccent : DpcColors.textSecondary,
+              fontSize: 11,
+              fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMonthSection(
+    BuildContext context,
+    MonthGroup monthGroup, {
+    bool isFirstInYear = false,
+  }) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            const Text(
-              'TOTAL AVAILABLE BALANCE',
-              style: TextStyle(
-                color: DpcColors.textSecondary,
-                fontSize: 11,
-                fontWeight: FontWeight.w700,
-                letterSpacing: 1.2,
-              ),
-            ),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-              decoration: BoxDecoration(
-                color: hasActiveConsent
-                    ? DpcColors.accentPositive.withValues(alpha: 0.12)
-                    : DpcColors.surfaceDark,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(
-                  color: hasActiveConsent
-                      ? DpcColors.accentPositive.withValues(alpha: 0.3)
-                      : DpcColors.surfaceBorder,
-                  width: 1,
+        // Month Header Ribbon
+        Padding(
+          padding: EdgeInsets.only(top: isFirstInYear ? 4 : 16, bottom: 8),
+          child: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+                decoration: BoxDecoration(
+                  color: DpcColors.surfaceTrack,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: DpcColors.surfaceBorder,
+                    width: 1,
+                  ),
+                ),
+                child: Text(
+                  monthGroup.title.toUpperCase(),
+                  style: const TextStyle(
+                    color: DpcColors.textPrimary,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 1.0,
+                  ),
                 ),
               ),
-              child: Row(
+              const SizedBox(width: 8),
+              Expanded(
+                child: Container(
+                  height: 1,
+                  color: DpcColors.surfaceBorder,
+                ),
+              ),
+              const SizedBox(width: 8),
+              // Monthly Outflow & Inflow summary
+              Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Container(
-                    width: 6,
-                    height: 6,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: hasActiveConsent
-                          ? DpcColors.accentPositive
-                          : DpcColors.accentLevel,
+                  if (monthGroup.totalDebit > 0) ...[
+                    Text(
+                      '-${BankTransaction.formatRupees(monthGroup.totalDebit)}',
+                      style: const TextStyle(
+                        color: Color(0xFFFF6E7F),
+                        fontSize: 10,
+                        fontWeight: FontWeight.w700,
+                      ),
                     ),
-                  ),
-                  const SizedBox(width: 6),
-                  Text(
-                    hasActiveConsent ? 'LIVE FEED' : 'SETUP REQUIRED',
-                    style: TextStyle(
-                      color: hasActiveConsent
-                          ? DpcColors.accentPositive
-                          : DpcColors.accentLevel,
-                      fontSize: 9,
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: 0.5,
+                    const SizedBox(width: 6),
+                  ],
+                  if (monthGroup.totalCredit > 0)
+                    Text(
+                      '+${BankTransaction.formatRupees(monthGroup.totalCredit)}',
+                      style: const TextStyle(
+                        color: DpcColors.accentPositive,
+                        fontSize: 10,
+                        fontWeight: FontWeight.w700,
+                      ),
                     ),
-                  ),
                 ],
+              ),
+            ],
+          ),
+        ),
+
+        // Day Groups within this Month
+        for (final dayGroup in monthGroup.dayGroups) ...[
+          _buildDayGroup(context, dayGroup),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildDayGroup(BuildContext context, DayGroup dayGroup) {
+    final isToday = dayGroup.title.startsWith('Today');
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Day Header
+          Padding(
+            padding: const EdgeInsets.only(left: 4, right: 4, top: 4, bottom: 6),
+            child: Row(
+              children: [
+                if (isToday)
+                  Container(
+                    width: 5,
+                    height: 5,
+                    margin: const EdgeInsets.only(right: 6),
+                    decoration: const BoxDecoration(
+                      color: DpcColors.accentPositive,
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                Text(
+                  dayGroup.title,
+                  style: TextStyle(
+                    color: isToday
+                        ? DpcColors.textPrimary
+                        : DpcColors.textSecondary,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    letterSpacing: -0.1,
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          // Day Grouped Transactions Card
+          Container(
+            decoration: DpcDecorations.cardBase(radius: 18),
+            child: ListView.separated(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              itemCount: dayGroup.transactions.length,
+              separatorBuilder: (context, _) => const Divider(
+                height: 1,
+                thickness: 1,
+                color: DpcColors.surfaceBorder,
+                indent: 68,
+                endIndent: 16,
+              ),
+              itemBuilder: (context, itemIdx) {
+                return _buildTransactionTile(
+                  context,
+                  dayGroup.transactions[itemIdx],
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildFilterEmptyState(BuildContext context, WidgetRef ref) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 32, horizontal: 24),
+      child: Center(
+        child: Column(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: DpcColors.surfaceDark,
+                shape: BoxShape.circle,
+                border: Border.all(color: DpcColors.surfaceBorder),
+              ),
+              child: const Icon(
+                Icons.filter_alt_off_rounded,
+                size: 28,
+                color: DpcColors.textSecondary,
+              ),
+            ),
+            const SizedBox(height: 14),
+            const Text(
+              'No transactions match this filter',
+              style: TextStyle(
+                color: DpcColors.textPrimary,
+                fontSize: 14,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            const SizedBox(height: 6),
+            const Text(
+              'Try changing your flow type or year selection.',
+              style: TextStyle(
+                color: DpcColors.textMuted,
+                fontSize: 12,
+              ),
+            ),
+            const SizedBox(height: 16),
+            TextButton(
+              onPressed: () {
+                ref.read(transactionTypeFilterProvider.notifier).state =
+                    TransactionTypeFilter.all;
+                ref.read(transactionSelectedYearProvider.notifier).state = null;
+              },
+              child: const Text(
+                'Reset Filters',
+                style: TextStyle(
+                  color: DpcColors.accentPositive,
+                  fontWeight: FontWeight.w700,
+                ),
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+
+  /// Floating Horizontal Hero Carousel Items as defined in DPC Screen A
+  List<DpcHeroCardItem> _buildHeroCarouselItems(
+    BuildContext context,
+    WidgetRef ref, {
+    required bool hasActiveConsent,
+    required ({double spent, double inflow}) weeklyStats,
+    required bool isSyncing,
+  }) {
+    return [
+      DpcHeroCardItem(
+        title: 'Setu AA ReBIT Gateway',
+        subtitle: hasActiveConsent
+            ? 'Consent Active • Live Real-time Bank Sync'
+            : 'Connect your bank account via RBI Regulated Account Aggregator',
+        badgeText: hasActiveConsent ? 'ACTIVE • RBI AA' : 'CONNECT',
+        icon: hasActiveConsent
+            ? Icons.verified_rounded
+            : Icons.account_balance_rounded,
+        gradient: DpcColors.heroPastel1,
+        actionLabel: hasActiveConsent
+            ? (isSyncing ? 'Syncing...' : 'Sync Transactions')
+            : 'Link Bank',
+        onTap: () => hasActiveConsent
+            ? _handleSyncAction(context, ref)
+            : _showLinkBankBottomSheet(context, ref),
+      ),
+      DpcHeroCardItem(
+        title: 'Cashflow Overview',
+        subtitle:
+            '${BankTransaction.formatRupees(weeklyStats.spent)} spent • ${BankTransaction.formatRupees(weeklyStats.inflow)} inflow this week',
+        badgeText: 'ANALYTICS',
+        icon: Icons.insights_rounded,
+        gradient: DpcColors.heroPastel2,
+        actionLabel: 'View Telemetry',
+        onTap: () => setState(() => _activeNavIndex = 1),
+      ),
+      DpcHeroCardItem(
+        title: 'Smart Categorization',
+        subtitle: 'Automated UPI narration cleaner and merchant brand tagging',
+        badgeText: 'FINANCIAL AI',
+        icon: Icons.auto_awesome_rounded,
+        gradient: DpcColors.heroPastel3,
+        actionLabel: 'Timeline Feed',
+        onTap: () {
+          if (_scrollController.hasClients) {
+            _scrollController.animateTo(
+              300,
+              duration: const Duration(milliseconds: 400),
+              curve: Curves.easeOutCubic,
+            );
+          }
+        },
+      ),
+      DpcHeroCardItem(
+        title: 'Security & Vault',
+        subtitle: 'Zero-secret on-device architecture secured with Supabase Vault',
+        badgeText: 'ENCRYPTED',
+        icon: Icons.lock_rounded,
+        gradient: DpcColors.heroPastel4,
+        actionLabel: 'Profile & Settings',
+        onTap: () => _showProfileBottomSheet(context, ref),
+      ),
+    ];
+  }
+
+  /// 1. Prominent Hero Aggregate:
+  /// Free-floating without container constraints as per DPC Rule.
+  Widget _buildHeroAggregate(
+    double balance,
+    bool hasActiveConsent, {
+    ({double spent, double inflow})? weeklyStats,
+    bool isSyncing = false,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'TOTAL AVAILABLE BALANCE',
+          style: TextStyle(
+            color: DpcColors.textSecondary,
+            fontSize: 11,
+            fontWeight: FontWeight.w700,
+            letterSpacing: 1.2,
+          ),
         ),
         const SizedBox(height: 6),
         Row(
@@ -512,306 +917,53 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
             ),
           ],
         ),
+        if (hasActiveConsent && weeklyStats != null) ...[
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              Icon(
+                Icons.trending_down_rounded,
+                size: 14,
+                color: weeklyStats.spent > 0
+                    ? const Color(0xFFFF6E7F)
+                    : DpcColors.textMuted,
+              ),
+              const SizedBox(width: 4),
+              Text(
+                weeklyStats.spent > 0
+                    ? '${BankTransaction.formatRupees(weeklyStats.spent)} outflow this week'
+                    : 'All accounts verified & synced',
+                style: const TextStyle(
+                  color: DpcColors.textSecondary,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+              if (weeklyStats.inflow > 0) ...[
+                const SizedBox(width: 8),
+                const Text('•', style: TextStyle(color: DpcColors.surfaceBorder)),
+                const SizedBox(width: 8),
+                Text(
+                  '+${BankTransaction.formatRupees(weeklyStats.inflow)} in',
+                  style: const TextStyle(
+                    color: DpcColors.accentPositive,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ],
       ],
     );
   }
 
-  /// 2. Floating Horizontal Hero Carousel
-  /// Cards with corner radius 28px, min height 220px, horizontal snapping, 16-24px peeking, #121214 text.
-  Widget _buildHeroCarouselSection(
-    BuildContext context,
-    WidgetRef ref,
-    bool hasActiveConsent,
-    ({double spent, double inflow}) weeklyStats,
-  ) {
-    final items = [
-      // Hero Pastel 1: Mint/Teal (Bank Connection & AA Sync)
-      DpcHeroCardItem(
-        title: hasActiveConsent ? 'Bank Feed Active' : 'Link Bank Account',
-        subtitle: hasActiveConsent
-            ? 'Real-time financial feed verified through Setu ReBIT AA Gateway.'
-            : 'Connect your savings account via RBI-regulated Account Aggregator.',
-        badgeText: hasActiveConsent ? 'Verified' : 'Connect',
-        icon: Icons.account_balance_rounded,
-        gradient: DpcColors.heroPastel1,
-        actionLabel: hasActiveConsent ? 'Sync Latest' : 'Link Now',
-        onTap: () {
-          if (!hasActiveConsent) {
-            _showLinkBankBottomSheet(context, ref);
-          } else {
-            ref.read(transactionFeedProvider.notifier).syncTransactions();
-          }
-        },
-      ),
-
-      // Hero Pastel 2: Lilac/Purple (AI Insights & Spend Velocity)
-      DpcHeroCardItem(
-        title: 'Spend Intelligence',
-        subtitle:
-            'Weekly spend: ${BankTransaction.formatRupees(weeklyStats.spent)} vs ${BankTransaction.formatRupees(weeklyStats.inflow)} inflow.',
-        badgeText: 'Analytics',
-        icon: Icons.insights_rounded,
-        gradient: DpcColors.heroPastel2,
-        actionLabel: 'Sync Feed',
-        onTap: () => _handleSyncAction(context, ref),
-      ),
-
-      // Hero Pastel 3: Peach/Rose (Cash Flow Velocity)
-      DpcHeroCardItem(
-        title: 'Cash Flow Velocity',
-        subtitle: weeklyStats.inflow >= weeklyStats.spent
-            ? 'Positive cash flow trajectory! Outflow safely managed.'
-            : 'Caution: Outflow velocity exceeding inflow over the last 7 days.',
-        badgeText: 'Cash Flow',
-        icon: Icons.speed_rounded,
-        gradient: DpcColors.heroPastel3,
-        actionLabel: 'Refresh',
-        onTap: () => _handleSyncAction(context, ref),
-      ),
-
-      // Hero Pastel 4: Warm Cream (Security & ReBIT)
-      DpcHeroCardItem(
-        title: '256-bit AA Shield',
-        subtitle:
-            'End-to-end encrypted financial information provider consent architecture.',
-        badgeText: 'Encrypted',
-        icon: Icons.shield_rounded,
-        gradient: DpcColors.heroPastel4,
-        actionLabel: 'Security Info',
-        onTap: () => _showProfileBottomSheet(context, ref),
-      ),
-    ];
-
-    return DpcHeroCarousel(items: items, height: 210);
-  }
-
-  /// 3. Action Bar: Setu AA ReBIT Gateway Status & Sync Action
-  Widget _buildActionBar(
-    BuildContext context,
-    WidgetRef ref,
-    bool isSyncing,
-    bool hasActiveConsent,
-  ) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      decoration: DpcDecorations.cardBase(radius: 18),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          InkWell(
-            onTap: () => _showLinkBankBottomSheet(context, ref),
-            borderRadius: BorderRadius.circular(10),
-            child: Row(
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: (hasActiveConsent
-                            ? DpcColors.accentPositive
-                            : DpcColors.accentPrimary)
-                        .withValues(alpha: 0.15),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Icon(
-                    hasActiveConsent
-                        ? Icons.verified_rounded
-                        : Icons.account_balance_outlined,
-                    size: 18,
-                    color: hasActiveConsent
-                        ? DpcColors.accentPositive
-                        : DpcColors.accentPrimary,
-                  ),
-                ),
-                const SizedBox(width: 10),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'Setu AA ReBIT Gateway',
-                      style: TextStyle(
-                        color: DpcColors.textPrimary,
-                        fontSize: 13,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      hasActiveConsent
-                          ? 'Consent Active • Live AA Sync'
-                          : 'Tap to Link Bank Account',
-                      style: TextStyle(
-                        color: hasActiveConsent
-                            ? DpcColors.accentPositive
-                            : DpcColors.textSecondary,
-                        fontSize: 10,
-                        fontWeight: hasActiveConsent
-                            ? FontWeight.w700
-                            : FontWeight.w500,
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-          ElevatedButton.icon(
-            onPressed: isSyncing ? null : () => _handleSyncAction(context, ref),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: hasActiveConsent
-                  ? DpcColors.surfaceTrack
-                  : DpcColors.accentPositive,
-              foregroundColor: hasActiveConsent
-                  ? DpcColors.textPrimary
-                  : DpcColors.textContrast,
-              elevation: 0,
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
-                side: hasActiveConsent
-                    ? const BorderSide(color: DpcColors.surfaceBorder)
-                    : BorderSide.none,
-              ),
-            ),
-            icon: isSyncing
-                ? SizedBox(
-                    width: 14,
-                    height: 14,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color: hasActiveConsent
-                          ? DpcColors.textPrimary
-                          : DpcColors.textContrast,
-                    ),
-                  )
-                : Icon(
-                    hasActiveConsent ? Icons.sync_rounded : Icons.link_rounded,
-                    size: 16,
-                  ),
-            label: Text(
-              isSyncing
-                  ? 'Syncing...'
-                  : hasActiveConsent
-                      ? 'Sync Feed'
-                      : 'Link Bank',
-              style: const TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w800,
-                letterSpacing: 0.2,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  /// 4. Weekly Snapshot Strip (Spent vs Inflow)
-  Widget _buildWeeklySnapshotStrip(double spent, double inflow) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      decoration: DpcDecorations.cardBase(radius: 16),
-      child: Row(
-        children: [
-          // Spent
-          Expanded(
-            child: Row(
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(7),
-                  decoration: BoxDecoration(
-                    color: DpcColors.accentNegative.withValues(alpha: 0.12),
-                    shape: BoxShape.circle,
-                  ),
-                  child: const Icon(
-                    Icons.arrow_upward_rounded,
-                    size: 14,
-                    color: DpcColors.accentNegative,
-                  ),
-                ),
-                const SizedBox(width: 10),
-                Flexible(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
-                        'Spent this week',
-                        style: DpcTypography.componentLabel,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        BankTransaction.formatRupees(spent),
-                        style: const TextStyle(
-                          color: DpcColors.accentNegative,
-                          fontSize: 14,
-                          fontWeight: FontWeight.w700,
-                        ),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-          Container(
-            width: 1,
-            height: 32,
-            color: DpcColors.surfaceBorder,
-          ),
-          const SizedBox(width: 14),
-          // Inflow
-          Expanded(
-            child: Row(
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(7),
-                  decoration: BoxDecoration(
-                    color: DpcColors.accentPositive.withValues(alpha: 0.12),
-                    shape: BoxShape.circle,
-                  ),
-                  child: const Icon(
-                    Icons.arrow_downward_rounded,
-                    size: 14,
-                    color: DpcColors.accentPositive,
-                  ),
-                ),
-                const SizedBox(width: 10),
-                Flexible(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
-                        'Total Inflow',
-                        style: DpcTypography.componentLabel,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        BankTransaction.formatRupees(inflow),
-                        style: const TextStyle(
-                          color: DpcColors.accentPositive,
-                          fontSize: 14,
-                          fontWeight: FontWeight.w700,
-                        ),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  /// 5. Individual Transaction Row in DPC Card Base
+  /// 5. Individual Transaction Row in Minimalist DPC Style
   Widget _buildTransactionTile(BuildContext context, BankTransaction txn) {
     final isDebit = txn.isDebit;
     final amountColor =
-        isDebit ? DpcColors.accentNegative : DpcColors.accentPositive;
+        isDebit ? DpcColors.textPrimary : DpcColors.accentPositive;
 
     return InkWell(
       onTap: () => _showTransactionDetailsModal(context, txn),
@@ -821,86 +973,50 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
         child: Row(
           children: [
-            // Category Icon with subtle tinted circle
+            // Category Icon with subtle tinted squircle
             Container(
-              width: 42,
-              height: 42,
+              width: 38,
+              height: 38,
               decoration: BoxDecoration(
-                color: (isDebit ? DpcColors.accentPrimary : DpcColors.accentPositive)
-                    .withValues(alpha: 0.12),
-                borderRadius: BorderRadius.circular(12),
+                color: (isDebit ? DpcColors.surfaceTrack : DpcColors.accentPositive)
+                    .withValues(alpha: isDebit ? 0.6 : 0.12),
+                borderRadius: BorderRadius.circular(11),
                 border: Border.all(
-                  color: (isDebit ? DpcColors.accentPrimary : DpcColors.accentPositive)
+                  color: (isDebit ? DpcColors.surfaceBorder : DpcColors.accentPositive)
                       .withValues(alpha: 0.25),
                   width: 1,
                 ),
               ),
               child: Icon(
                 txn.icon,
-                color: isDebit ? DpcColors.accentPrimary : DpcColors.accentPositive,
-                size: 20,
+                color: isDebit ? DpcColors.textSecondary : DpcColors.accentPositive,
+                size: 18,
               ),
             ),
             const SizedBox(width: 12),
-            // Merchant name & Narration
+            // Clean Merchant name & Time / Mode
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Row(
-                    children: [
-                      Flexible(
-                        child: Text(
-                          txn.cleanMerchantName,
-                          style: const TextStyle(
-                            color: DpcColors.textPrimary,
-                            fontSize: 14,
-                            fontWeight: FontWeight.w700,
-                          ),
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                      const SizedBox(width: 6),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 6,
-                          vertical: 2,
-                        ),
-                        decoration: BoxDecoration(
-                          color: DpcColors.surfaceDark,
-                          borderRadius: BorderRadius.circular(6),
-                          border: Border.all(
-                            color: DpcColors.surfaceBorder,
-                            width: 1,
-                          ),
-                        ),
-                        child: Text(
-                          txn.mode,
-                          style: const TextStyle(
-                            color: DpcColors.textSecondary,
-                            fontSize: 9,
-                            fontWeight: FontWeight.w800,
-                          ),
-                        ),
-                      ),
-                    ],
+                  Text(
+                    txn.cleanMerchantName,
+                    style: const TextStyle(
+                      color: DpcColors.textPrimary,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: -0.2,
+                    ),
+                    overflow: TextOverflow.ellipsis,
                   ),
                   const SizedBox(height: 3),
                   Text(
-                    txn.narration,
+                    txn.category != null && txn.category!.isNotEmpty
+                        ? '${txn.formattedTime} • ${txn.mode} • ${txn.category}'
+                        : '${txn.formattedTime} • ${txn.mode}',
                     style: const TextStyle(
                       color: DpcColors.textSecondary,
                       fontSize: 11,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    maxLines: 1,
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    txn.formattedDate,
-                    style: const TextStyle(
-                      color: DpcColors.textMuted,
-                      fontSize: 10,
                       fontWeight: FontWeight.w500,
                     ),
                   ),
@@ -908,29 +1024,15 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
               ),
             ),
             const SizedBox(width: 8),
-            // Amount & Running Balance
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                Text(
-                  '${isDebit ? '- ' : '+ '}${txn.formattedAmount}',
-                  style: TextStyle(
-                    color: amountColor,
-                    fontSize: 14,
-                    fontWeight: FontWeight.w800,
-                    letterSpacing: -0.2,
-                  ),
-                ),
-                const SizedBox(height: 3),
-                Text(
-                  'Bal: ${txn.formattedBalance}',
-                  style: const TextStyle(
-                    color: DpcColors.textMuted,
-                    fontSize: 10,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-              ],
+            // High-contrast clean Amount
+            Text(
+              '${isDebit ? '- ' : '+ '}${txn.formattedAmount}',
+              style: TextStyle(
+                color: amountColor,
+                fontSize: 14,
+                fontWeight: FontWeight.w700,
+                letterSpacing: -0.2,
+              ),
             ),
           ],
         ),
@@ -1208,24 +1310,26 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
               color: DpcColors.surfaceDark,
               shape: BoxShape.circle,
               border: Border.all(
-                color: DpcColors.surfaceBorder,
+                color: hasActiveConsent
+                    ? DpcColors.accentPositive.withValues(alpha: 0.35)
+                    : DpcColors.surfaceBorder,
                 width: 1,
               ),
             ),
             child: Icon(
               hasActiveConsent
-                  ? Icons.receipt_long_rounded
-                  : Icons.account_balance_rounded,
+                  ? Icons.account_balance_rounded
+                  : Icons.account_balance_outlined,
               size: 44,
               color: hasActiveConsent
-                  ? DpcColors.accentPrimary
-                  : DpcColors.accentPositive,
+                  ? DpcColors.accentPositive
+                  : DpcColors.textSecondary,
             ),
           ),
           const SizedBox(height: 20),
           Text(
             hasActiveConsent
-                ? 'No Transactions Found'
+                ? 'Bank Connected Successfully'
                 : 'No Bank Account Linked',
             style: const TextStyle(
               color: DpcColors.textPrimary,
@@ -1236,13 +1340,13 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
           const SizedBox(height: 8),
           Text(
             hasActiveConsent
-                ? 'No recent transactions were found for this linked account.'
+                ? 'Your Account Aggregator consent is active. Slide below to authorize Setthi to fetch and display your transactions.'
                 : 'Connect your bank account via Setu Account Aggregator to view real-time transactions and balance.',
             textAlign: TextAlign.center,
             style: const TextStyle(
               color: DpcColors.textSecondary,
               fontSize: 13,
-              height: 1.4,
+              height: 1.45,
             ),
           ),
           if (!hasActiveConsent) ...[
@@ -1269,38 +1373,14 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
             ),
           ] else ...[
             const SizedBox(height: 24),
-            ElevatedButton.icon(
-              onPressed: isSyncing
-                  ? null
-                  : () => ref
-                      .read(transactionFeedProvider.notifier)
-                      .syncTransactions(),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: DpcColors.accentPositive,
-                foregroundColor: DpcColors.textContrast,
-                elevation: 0,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(16),
-                ),
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 22,
-                  vertical: 12,
-                ),
-              ),
-              icon: isSyncing
-                  ? const SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: DpcColors.textContrast,
-                      ),
-                    )
-                  : const Icon(Icons.sync_rounded, size: 18),
-              label: Text(
-                isSyncing ? 'Syncing...' : 'Sync Transactions',
-                style: const TextStyle(fontWeight: FontWeight.w800),
-              ),
+            DpcSlideToConfirm(
+              label: 'Slide to Fetch Transactions  ››',
+              completedLabel: 'Authorizing & Fetching Data...',
+              onConfirmed: () async {
+                await ref
+                    .read(transactionFeedProvider.notifier)
+                    .syncTransactions();
+              },
             ),
           ],
         ],
@@ -1331,58 +1411,205 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
   }
 
   Widget _buildErrorState(BuildContext context, WidgetRef ref, String error) {
+    final lower = error.toLowerCase();
+    final isConsentIssue = lower.contains('consent use exceeded') ||
+        lower.contains('consent expired') ||
+        lower.contains('consent not active') ||
+        lower.contains('consent revoked') ||
+        lower.contains('no active account aggregator consent') ||
+        lower.contains('fidata') ||
+        lower.contains('datarange');
+
+    final isNetworkIssue = lower.contains('socketexception') ||
+        lower.contains('timed out') ||
+        lower.contains('clientexception') ||
+        lower.contains('connection');
+
+    final String title;
+    final String message;
+    if (isConsentIssue) {
+      title = 'Bank Session Expired';
+      message =
+          'Your previous bank connection session has completed or expired. Reconnect your bank account via Setu Account Aggregator to continue.';
+    } else if (isNetworkIssue) {
+      title = 'Connection Timeout';
+      message =
+          'Unable to reach the banking gateway. Please check your internet connection and try again.';
+    } else {
+      title = 'Unable to Sync Transactions';
+      message =
+          'A temporary error occurred while retrieving your bank transactions. You can retry or reconnect your bank account.';
+    }
+
     return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: DpcColors.accentNegative.withValues(alpha: 0.12),
-                shape: BoxShape.circle,
-              ),
-              child: const Icon(
-                Icons.error_outline_rounded,
-                color: DpcColors.accentNegative,
-                size: 38,
-              ),
-            ),
-            const SizedBox(height: 16),
-            const Text(
-              'Failed to Load Transactions',
-              style: TextStyle(
-                color: DpcColors.textPrimary,
-                fontSize: 18,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              error,
-              textAlign: TextAlign.center,
-              style: const TextStyle(
-                color: DpcColors.textSecondary,
-                fontSize: 12,
-              ),
-            ),
-            const SizedBox(height: 20),
-            ElevatedButton.icon(
-              onPressed: () =>
-                  ref.read(transactionFeedProvider.notifier).syncTransactions(),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: DpcColors.surfaceTrack,
-                foregroundColor: DpcColors.textPrimary,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                  side: const BorderSide(color: DpcColors.surfaceBorder),
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 32),
+        child: Container(
+          padding: const EdgeInsets.all(24),
+          decoration: DpcDecorations.cardBase(radius: 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 56,
+                height: 56,
+                decoration: BoxDecoration(
+                  color: (isConsentIssue
+                          ? DpcColors.accentLevel
+                          : DpcColors.accentNegative)
+                      .withValues(alpha: 0.15),
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: (isConsentIssue
+                            ? DpcColors.accentLevel
+                            : DpcColors.accentNegative)
+                        .withValues(alpha: 0.3),
+                    width: 1,
+                  ),
+                ),
+                child: Icon(
+                  isConsentIssue
+                      ? Icons.account_balance_outlined
+                      : isNetworkIssue
+                          ? Icons.wifi_off_rounded
+                          : Icons.sync_problem_rounded,
+                  color: isConsentIssue
+                      ? DpcColors.accentLevel
+                      : DpcColors.accentNegative,
+                  size: 26,
                 ),
               ),
-              icon: const Icon(Icons.refresh_rounded, size: 16),
-              label: const Text('Try Again'),
-            ),
-          ],
+              const SizedBox(height: 18),
+              Text(
+                title,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  color: DpcColors.textPrimary,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: -0.3,
+                ),
+              ),
+              const SizedBox(height: 10),
+              Text(
+                message,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  color: DpcColors.textSecondary,
+                  fontSize: 13,
+                  height: 1.45,
+                ),
+              ),
+              const SizedBox(height: 24),
+              // Action Buttons
+              if (isConsentIssue) ...[
+                SizedBox(
+                  width: double.infinity,
+                  height: 46,
+                  child: ElevatedButton.icon(
+                    onPressed: () {
+                      ActiveConsentIdNotifier.deletePersistedConsent();
+                      ref.read(activeConsentIdProvider.notifier).clear();
+                      _showLinkBankBottomSheet(context, ref);
+                    },
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: DpcColors.accentPositive,
+                      foregroundColor: DpcColors.textContrast,
+                      elevation: 0,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                    ),
+                    icon: const Icon(Icons.add_link_rounded, size: 18),
+                    label: const Text(
+                      'Connect Bank Account',
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                SizedBox(
+                  width: double.infinity,
+                  height: 42,
+                  child: OutlinedButton(
+                    onPressed: () {
+                      ActiveConsentIdNotifier.deletePersistedConsent();
+                      ref.read(activeConsentIdProvider.notifier).clear();
+                      ref
+                          .read(transactionFeedProvider.notifier)
+                          .syncTransactions();
+                    },
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: DpcColors.textSecondary,
+                      side: const BorderSide(color: DpcColors.surfaceBorder),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                    ),
+                    child: const Text(
+                      'Clear Stale Session',
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ),
+              ] else ...[
+                SizedBox(
+                  width: double.infinity,
+                  height: 46,
+                  child: ElevatedButton.icon(
+                    onPressed: () => ref
+                        .read(transactionFeedProvider.notifier)
+                        .syncTransactions(),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: DpcColors.surfaceTrack,
+                      foregroundColor: DpcColors.textPrimary,
+                      elevation: 0,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14),
+                        side: const BorderSide(color: DpcColors.surfaceBorder),
+                      ),
+                    ),
+                    icon: const Icon(Icons.refresh_rounded, size: 18),
+                    label: const Text(
+                      'Try Again',
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                SizedBox(
+                  width: double.infinity,
+                  height: 42,
+                  child: OutlinedButton(
+                    onPressed: () => _showLinkBankBottomSheet(context, ref),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: DpcColors.textSecondary,
+                      side: const BorderSide(color: DpcColors.surfaceBorder),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                    ),
+                    child: const Text(
+                      'Link Different Bank',
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ],
+          ),
         ),
       ),
     );
@@ -1392,7 +1619,19 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
   // BOTTOM SHEETS & MODALS (DPC OLED STYLED)
   // ==========================================
   Future<void> _handleSyncAction(BuildContext context, WidgetRef ref) async {
-    final hasActiveConsent = ref.read(hasActiveConsentProvider);
+    var hasActiveConsent = ref.read(hasActiveConsentProvider);
+    if (!hasActiveConsent) {
+      try {
+        final dbService = ref.read(supabaseDbServiceProvider);
+        final activeConsent = await dbService.fetchActiveConsent();
+        if (activeConsent != null && activeConsent['consent_id'] != null) {
+          final cid = activeConsent['consent_id'] as String;
+          ref.read(activeConsentIdProvider.notifier).setConsentId(cid);
+          hasActiveConsent = true;
+        }
+      } catch (_) {}
+    }
+
     if (!hasActiveConsent) {
       final pendingConsentId = ref.read(pendingConsentIdProvider);
       if (pendingConsentId != null && pendingConsentId.isNotEmpty) {
@@ -1438,7 +1677,7 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
     bool isCreatingConsent = false;
     String? errorMessage;
 
-    await showModalBottomSheet(
+    final consentInfo = await showModalBottomSheet<Map<String, dynamic>>(
       context: context,
       isScrollControlled: true,
       backgroundColor: DpcColors.surfaceDark,
@@ -1448,7 +1687,7 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
       ),
       builder: (modalContext) {
         return StatefulBuilder(
-          builder: (context, setModalState) {
+          builder: (sheetContext, setModalState) {
             return Padding(
               padding: EdgeInsets.only(
                 left: 20,
@@ -1489,69 +1728,87 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
                         ),
                       ),
                       const SizedBox(width: 12),
-                      const Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            'Link Bank via Account Aggregator',
-                            style: TextStyle(
-                              color: DpcColors.textPrimary,
-                              fontSize: 16,
-                              fontWeight: FontWeight.w700,
+                      const Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Link Bank via Account Aggregator',
+                              style: TextStyle(
+                                color: DpcColors.textPrimary,
+                                fontSize: 16,
+                                fontWeight: FontWeight.w700,
+                              ),
                             ),
-                          ),
-                          SizedBox(height: 2),
-                          Text(
-                            'Setu AA ReBIT Gateway (RBI Regulated)',
-                            style: TextStyle(
-                              color: DpcColors.textSecondary,
-                              fontSize: 11,
+                            SizedBox(height: 2),
+                            Text(
+                              'Setu AA ReBIT Gateway (RBI Regulated)',
+                              style: TextStyle(
+                                color: DpcColors.textMuted,
+                                fontSize: 12,
+                              ),
                             ),
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
                     ],
                   ),
-                  const SizedBox(height: 18),
+                  const SizedBox(height: 20),
                   const Text(
-                    'Registered Mobile Number',
+                    'MOBILE NUMBER LINKED TO BANK',
                     style: TextStyle(
-                      color: DpcColors.textSecondary,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
+                      color: DpcColors.textMuted,
+                      fontSize: 10,
+                      letterSpacing: 1.5,
+                      fontWeight: FontWeight.w700,
                     ),
                   ),
                   const SizedBox(height: 8),
                   TextField(
                     controller: phoneController,
                     keyboardType: TextInputType.phone,
-                    autofocus: true,
                     style: const TextStyle(
                       color: DpcColors.textPrimary,
-                      fontSize: 16,
+                      fontSize: 14,
                       fontWeight: FontWeight.w600,
                     ),
                     decoration: InputDecoration(
-                      filled: true,
-                      fillColor: DpcColors.bgOled,
+                      hintText: 'e.g. 9845167455',
+                      hintStyle: const TextStyle(
+                        color: DpcColors.textMuted,
+                        fontSize: 14,
+                      ),
                       prefixIcon: const Icon(
                         Icons.phone_iphone_rounded,
-                        color: DpcColors.accentPrimary,
-                        size: 20,
+                        color: DpcColors.textMuted,
+                        size: 18,
                       ),
-                      hintText: 'Enter 10-digit mobile number',
-                      hintStyle: const TextStyle(color: DpcColors.textMuted),
+                      filled: true,
+                      fillColor: DpcColors.bgOled,
                       border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(14),
-                        borderSide: const BorderSide(color: DpcColors.surfaceBorder),
+                        borderSide: const BorderSide(
+                          color: DpcColors.surfaceBorder,
+                          width: 1,
+                        ),
                       ),
                       enabledBorder: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(14),
-                        borderSide: const BorderSide(color: DpcColors.surfaceBorder),
+                        borderSide: const BorderSide(
+                          color: DpcColors.surfaceBorder,
+                          width: 1,
+                        ),
                       ),
                       focusedBorder: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(14),
-                        borderSide: const BorderSide(color: DpcColors.accentPositive),
+                        borderSide: const BorderSide(
+                          color: DpcColors.accentPositive,
+                          width: 1.5,
+                        ),
+                      ),
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 14,
                       ),
                     ),
                   ),
@@ -1581,6 +1838,23 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
                       onPressed: isCreatingConsent
                           ? null
                           : () async {
+                              final user = ref.read(currentUserProvider);
+                              if (user == null && SupabaseConfig.isConfigured) {
+                                if (modalContext.mounted) {
+                                  Navigator.of(modalContext).pop();
+                                }
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                    content: Text(
+                                      'Please sign in to your account first so your bank data is securely linked.',
+                                    ),
+                                    backgroundColor: DpcColors.accentNegative,
+                                  ),
+                                );
+                                ref.read(authBypassProvider.notifier).reset();
+                                return;
+                              }
+
                               final mobile = phoneController.text.trim();
                               if (mobile.length < 10) {
                                 setModalState(() {
@@ -1607,27 +1881,21 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
                                     .read(pendingConsentIdProvider.notifier)
                                     .set(consentId);
 
-                                if (modalContext.mounted) {
-                                  Navigator.of(modalContext).pop();
-                                }
-
-                                if (context.mounted) {
-                                  final approved =
-                                      await Navigator.of(context).push<bool>(
-                                    MaterialPageRoute(
-                                      builder: (_) => SetuConsentWebView(
-                                        consentUrl: consentUrl,
+                                try {
+                                  await ref
+                                      .read(supabaseDbServiceProvider)
+                                      .recordConsent(
                                         consentId: consentId,
-                                        aaService: aaService,
-                                      ),
-                                    ),
-                                  );
+                                        status: 'PENDING',
+                                        vua: '$mobile@onemoney',
+                                      );
+                                } catch (_) {}
 
-                                  if (approved == true && context.mounted) {
-                                    await ref
-                                        .read(transactionFeedProvider.notifier)
-                                        .setConsentAndSync(consentId);
-                                  }
+                                if (modalContext.mounted) {
+                                  Navigator.of(modalContext).pop({
+                                    'consentId': consentId,
+                                    'consentUrl': consentUrl,
+                                  });
                                 }
                               } catch (e) {
                                 setModalState(() {
@@ -1668,6 +1936,56 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
         );
       },
     );
+
+    if (consentInfo == null || !context.mounted) return;
+
+    final consentId = consentInfo['consentId'] as String;
+    final consentUrl = consentInfo['consentUrl'] as String;
+    final aaService = ref.read(setuAaServiceProvider);
+
+    final approved = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        builder: (_) => SetuConsentWebView(
+          consentUrl: consentUrl,
+          consentId: consentId,
+          aaService: aaService,
+        ),
+      ),
+    );
+
+    bool isApproved = approved == true;
+    if (!isApproved) {
+      try {
+        final status = await aaService.checkConsentStatus(consentId);
+        if (status == 'ACTIVE') {
+          isApproved = true;
+        }
+      } catch (_) {}
+    }
+
+    if (isApproved && context.mounted) {
+      ref.read(activeConsentIdProvider.notifier).setConsentId(consentId);
+      ref.read(pendingConsentIdProvider.notifier).clear();
+      try {
+        await ref.read(supabaseDbServiceProvider).recordConsent(
+              consentId: consentId,
+              status: 'ACTIVE',
+            );
+      } catch (_) {}
+
+      if (context.mounted) {
+        // Display the sliding permission sheet to authorize data sync
+        await BankSyncPermissionSheet.show(
+          context: context,
+          consentId: consentId,
+          onSyncRequested: () async {
+            await ref
+                .read(transactionFeedProvider.notifier)
+                .setConsentAndSync(consentId);
+          },
+        );
+      }
+    }
   }
 
   /// DPC Styled Transaction Details Modal
@@ -1753,6 +2071,8 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
                   ],
                 ),
                 const SizedBox(height: 20),
+                if (txn.category != null && txn.category!.isNotEmpty)
+                  _buildDetailRow('Category', txn.category!),
                 _buildDetailRow('Mode', txn.mode),
                 _buildDetailRow('Timestamp', txn.formattedDate),
                 _buildDetailRow('Balance After', txn.formattedBalance),

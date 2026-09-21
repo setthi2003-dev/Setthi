@@ -105,20 +105,37 @@ class AuthService {
     required String email,
     required String token,
   }) async {
+    AuthResponse response;
     try {
-      return await _effectiveClient.auth.verifyOTP(
+      response = await _effectiveClient.auth.verifyOTP(
         type: OtpType.signup,
         token: token.trim(),
         email: email.trim(),
       );
     } catch (_) {
       // Fallback to email OTP type if signup was already completed or configured differently
-      return await _effectiveClient.auth.verifyOTP(
+      response = await _effectiveClient.auth.verifyOTP(
         type: OtpType.email,
         token: token.trim(),
         email: email.trim(),
       );
     }
+
+    // Ensure profile row exists in public.profiles as an explicit fallback to the DB trigger
+    if (response.user != null) {
+      final user = response.user!;
+      final fullName = user.userMetadata?['full_name']?.toString();
+      try {
+        await _effectiveClient.from('profiles').upsert({
+          'id': user.id,
+          'email': user.email ?? email.trim(),
+          if (fullName != null && fullName.isNotEmpty) 'full_name': fullName,
+          'updated_at': DateTime.now().toUtc().toIso8601String(),
+        });
+      } catch (_) {}
+    }
+
+    return response;
   }
 
   /// Resend confirmation OTP to email

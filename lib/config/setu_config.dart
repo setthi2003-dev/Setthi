@@ -1,7 +1,8 @@
 import 'package:flutter/foundation.dart';
+import 'supabase_config.dart';
 
 /// Configuration class reading Setu AA Gateway credentials from `--dart-define`
-/// and `--dart-define-from-file`.
+/// and `--dart-define-from-file`, with fallback to Supabase Vault.
 class SetuConfig {
   static const String baseUrl = String.fromEnvironment(
     'SETU_BASE_URL',
@@ -36,20 +37,23 @@ class SetuConfig {
         'x-product-instance-id': productInstanceId,
       };
 
-  /// Indicates if live/sandbox client credentials were provided
+  /// Indicates if live/sandbox client credentials were provided or managed via Supabase Vault
   static bool get isConfigured =>
-      clientId.isNotEmpty &&
-      clientSecret.isNotEmpty &&
-      productInstanceId.isNotEmpty;
+      (clientId.isNotEmpty &&
+          clientSecret.isNotEmpty &&
+          productInstanceId.isNotEmpty) ||
+      SupabaseConfig.isConfigured;
 
   /// Logs the configuration state to the console
   static void logStatus() {
     if (!isConfigured) {
       debugPrint(
-        '[SetuConfig] Warning: Setu AA credentials not configured. Please pass --dart-define-from-file=secrets.json.',
+        '[SetuConfig] Warning: Setu AA credentials not configured.',
       );
+    } else if (clientId.isNotEmpty && clientSecret.isNotEmpty) {
+      debugPrint('[SetuConfig] Setu AA credentials loaded from local environment.');
     } else {
-      debugPrint('[SetuConfig] Setu AA credentials loaded successfully.');
+      debugPrint('[SetuConfig] Setu AA credentials managed securely via Supabase Vault.');
     }
   }
 }
