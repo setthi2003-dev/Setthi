@@ -1,14 +1,26 @@
+import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'config/setu_config.dart';
 import 'config/supabase_config.dart';
+import 'firebase_options.dart';
 import 'providers/auth_providers.dart';
 import 'screens/auth_screen.dart';
+import 'screens/reset_password_screen.dart';
 import 'screens/transaction_feed_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Initialize Firebase with platform-specific options
+  try {
+    await Firebase.initializeApp(
+      options: DefaultFirebaseOptions.currentPlatform,
+    );
+  } catch (e) {
+    debugPrint('[Firebase] Initialization info/warning: $e');
+  }
 
   // Log configuration state (informs developer whether secrets.json is loaded)
   SetuConfig.logStatus();
@@ -37,6 +49,7 @@ class SetthiApp extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final isPasswordRecovery = ref.watch(isPasswordRecoveryProvider);
     final isAuthenticated = ref.watch(isAuthenticatedProvider);
 
     return MaterialApp(
@@ -62,9 +75,11 @@ class SetthiApp extends ConsumerWidget {
         ),
         useMaterial3: true,
       ),
-      home: isAuthenticated
-          ? const TransactionFeedScreen()
-          : const AuthScreen(),
+      home: isPasswordRecovery
+          ? const ResetPasswordScreen()
+          : (isAuthenticated
+              ? const TransactionFeedScreen()
+              : const AuthScreen()),
     );
   }
 }

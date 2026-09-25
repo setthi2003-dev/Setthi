@@ -12,6 +12,7 @@ const IGNORED_BANKING_TOKENS = new Set([
   "P2A", "P2P", "TRF", "BIL", "INB", "MB", "MOB", "REV", "RET",
   "CHQ", "CLR", "PAYMENT", "TRANSFER", "PURCHASE", "DEPOSIT",
   "WITHDRAWAL", "SETU", "REFUND", "BANK",
+  "OTHER", "OTHERS", "MISC",
 ]);
 
 function capitalizeWords(input: string): string {
@@ -789,6 +790,118 @@ Deno.serve(async (req: Request) => {
           }
         }
       }
+    }
+
+    // 7. Run Habit Classification & Spend Tier Enrichment
+    try {
+      console.log(`[sync-transactions] Running classify_transactions for user ${user.id}...`);
+      await supabase.rpc("classify_transactions", { p_user_id: user.id });
+    } catch (classifyErr) {
+      console.error(`[sync-transactions] Error in classify_transactions:`, classifyErr);
+    }
+
+    // 8. Run Automated Nudge Evaluation
+    try {
+      console.log(`[sync-transactions] Evaluating proactive AI nudges for user ${user.id}...`);
+
+      // Determine batch temporal anchor:
+      // If transactions occurred within the last 7 days of Date.now(), it's live -> anchor = Date.now().
+      // Otherwise (historical statement sync or sandbox data), anchor = latest transaction in the batch!
+      let batchAnchorMs = 0;
+      let hasLiveTxn = false;
+      const sevenDaysAgoMs = Date.now() - 7 * 24 * 60 * 60 * 1000;
+
+      for (const acc of parsedAccounts) {
+        for (const t of acc.transactions) {
+          const tMs = new Date(t.transactionTimestamp).getTime();
+          if (tMs >= sevenDaysAgoMs && tMs <= Date.now()) {
+            hasLiveTxn = true;
+          }
+          if (tMs > batchAnchorMs) {
+            batchAnchorMs = tMs;
+          }
+        }
+      }
+      if (!hasLiveTxn && batchAnchorMs > 0) {
+        console.log(`[sync-transactions] Historical/Sandbox sync detected. Anchoring evaluation to ${new Date(batchAnchorMs).toISOString()}`);
+      } else {
+        batchAnchorMs = Date.now();
+      }
+
+      const anchorIso = new Date(batchAnchorMs).toISOString();
+
+      // 8.1 Check 3+ quick-commerce transactions in 24 hours prior to anchor
+      const oneDayAgo = new Date(batchAnchorMs - 24 * 60 * 60 * 1000).toISOString();
+      const { data: qcTxns } = await supabase
+        .from("bank_transactions")
+        .select("id")
+        .eq("user_id", user.id)
+        .eq("type", "DEBIT")
+        .gte("transaction_timestamp", oneDayAgo)
+        .lte("transaction_timestamp", anchorIso)
+        .or("clean_merchant_name.ilike.%zepto%,clean_merchant_name.ilike.%blinkit%,clean_merchant_name.ilike.%instamart%,narration.ilike.%zepto%,narration.ilike.%blinkit%,narration.ilike.%instamart%");
+
+      if (qcTxns && qcTxns.length >= 3) {
+        await supabase
+          .from("ai_nudges")
+          .update({ is_dismissed: true })
+          .eq("user_id", user.id)
+          .eq("headline", "Quick-Commerce Sprint ⚡");
+
+        await supabase.from("ai_nudges").insert({
+          user_id: user.id,
+          headline: "Quick-Commerce Sprint ⚡",
+          body: "You've placed 3+ quick deliveries in 24 hours. Impulse drain is kicking in.",
+          badge_text: "IMPULSE ALERT",
+          card_style: "heroPastel3",
+          action_label: "Review Impulse",
+          metric_tag: `${qcTxns.length} orders`,
+          is_dismissed: false,
+        });
+      }
+
+      // 8.2 Check if 7-day spend velocity exceeds inflow prior to anchor
+      const sevenDaysAgo = new Date(batchAnchorMs - 7 * 24 * 60 * 60 * 1000).toISOString();
+      const { data: recent7d } = await supabase
+        .from("bank_transactions")
+        .select("type, amount")
+        .eq("user_id", user.id)
+        .gte("transaction_timestamp", sevenDaysAgo)
+        .lte("transaction_timestamp", anchorIso);
+
+      if (recent7d && recent7d.length > 0) {
+        let spent7d = 0;
+        let inflow7d = 0;
+        for (const t of recent7d) {
+          if (t.type === "DEBIT") spent7d += Number(t.amount || 0);
+          else if (t.type === "CREDIT") inflow7d += Number(t.amount || 0);
+        }
+
+        if (spent7d > inflow7d && spent7d > 0) {
+          const deltaPercent = inflow7d > 0
+            ? Math.round(((spent7d - inflow7d) / inflow7d) * 100)
+            : 100;
+
+          await supabase
+            .from("ai_nudges")
+            .update({ is_dismissed: true })
+            .eq("user_id", user.id)
+            .eq("headline", "Burn Rate Warning ⚠️");
+
+          await supabase.from("ai_nudges").insert({
+            user_id: user.id,
+            headline: "Burn Rate Warning ⚠️",
+            body: `Outflows are outpacing weekly inflows by ${deltaPercent}%. Time to pump the brakes.`,
+            badge_text: "VELOCITY",
+            card_style: "heroPastel2",
+            action_label: "Inspect Burn",
+            metric_tag: `+${deltaPercent}% over`,
+            is_dismissed: false,
+          });
+        }
+      }
+    } catch (nudgeErr) {
+      console.error(`[sync-transactions] Error evaluating nudges:`, nudgeErr);
     }
 
     return new Response(

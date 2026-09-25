@@ -36,6 +36,35 @@ class AuthBypassNotifier extends Notifier<bool> {
 final authBypassProvider =
     NotifierProvider<AuthBypassNotifier, bool>(AuthBypassNotifier.new);
 
+/// State notifier tracking whether the user entered the app via a password recovery link
+class PasswordRecoveryNotifier extends Notifier<bool> {
+  @override
+  bool build() {
+    // Listen to auth state stream events for passwordRecovery
+    ref.listen<AsyncValue<AuthState>>(authStateChangesProvider, (prev, next) {
+      if (next.value?.event == AuthChangeEvent.passwordRecovery) {
+        state = true;
+      }
+    });
+
+    final currentEvent = ref.read(authStateChangesProvider).value?.event;
+    return currentEvent == AuthChangeEvent.passwordRecovery;
+  }
+
+  void setRecovery(bool isRecovery) {
+    state = isRecovery;
+  }
+
+  void clearRecovery() {
+    state = false;
+  }
+}
+
+final isPasswordRecoveryProvider =
+    NotifierProvider<PasswordRecoveryNotifier, bool>(
+      PasswordRecoveryNotifier.new,
+    );
+
 /// Boolean provider indicating whether the user is currently authenticated
 final isAuthenticatedProvider = Provider<bool>((ref) {
   final isBypassed = ref.watch(authBypassProvider);
@@ -44,3 +73,4 @@ final isAuthenticatedProvider = Provider<bool>((ref) {
   final user = ref.watch(currentUserProvider);
   return user != null;
 });
+

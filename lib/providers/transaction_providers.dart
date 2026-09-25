@@ -2,6 +2,7 @@ import 'dart:io';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../config/supabase_config.dart';
+import '../models/ai_nudge_model.dart';
 import '../models/transaction_group_model.dart';
 import '../models/transaction_model.dart';
 import '../services/fi_data_service.dart';
@@ -253,6 +254,7 @@ class TransactionFeedNotifier extends AsyncNotifier<List<BankTransaction>> {
     if (_isLoadingMore || !_hasMore) return;
     _isLoadingMore = true;
     final currentList = state.value ?? [];
+    state = AsyncData(currentList);
 
     try {
       final dbService = ref.read(supabaseDbServiceProvider);
@@ -270,10 +272,73 @@ class TransactionFeedNotifier extends AsyncNotifier<List<BankTransaction>> {
       final deduped = merged.where((t) => seen.add(t.txnId)).toList();
       state = AsyncData(deduped);
     } catch (e) {
-      // safe no-op on error
+      state = AsyncData(currentList);
     } finally {
       _isLoadingMore = false;
+      state = AsyncData(state.value ?? currentList);
     }
+  }
+
+  /// Updates the category for a transaction optimistically, updates Supabase in background,
+  /// and optionally creates a merchant auto-categorization rule.
+  Future<void> updateTransactionCategory({
+    required String txnId,
+    required String category,
+    bool applyToAllFromMerchant = false,
+    String? cleanMerchantName,
+  }) async {
+    final currentList = state.value ?? [];
+    List<BankTransaction> updatedList;
+
+    final cleanLower = cleanMerchantName?.toLowerCase().trim() ?? '';
+    final isGeneric = cleanLower == 'others' ||
+        cleanLower == 'other' ||
+        cleanLower == 'transaction' ||
+        cleanLower == 'transactions' ||
+        cleanLower == 'transfer' ||
+        cleanLower == 'unknown' ||
+        cleanLower.isEmpty;
+
+    if (applyToAllFromMerchant && !isGeneric && cleanMerchantName != null) {
+      final targetName = cleanLower;
+      updatedList = currentList.map((t) {
+        if (t.cleanMerchantName.toLowerCase().trim() == targetName) {
+          return t.copyWith(category: category);
+        }
+        return t;
+      }).toList();
+    } else {
+      updatedList = currentList.map((t) {
+        if (t.txnId == txnId) {
+          return t.copyWith(category: category);
+        }
+        return t;
+      }).toList();
+    }
+
+    state = AsyncData(updatedList);
+
+    try {
+      final dbService = ref.read(supabaseDbServiceProvider);
+      await dbService.updateTransactionCategory(
+        txnId: txnId,
+        category: category,
+      );
+
+      if (applyToAllFromMerchant && !isGeneric && cleanMerchantName != null) {
+        await dbService.updateAllTransactionsCategoryByMerchant(
+          cleanMerchantName: cleanMerchantName,
+          category: category,
+        );
+
+        final keyword = cleanMerchantName.toLowerCase().trim();
+        await dbService.saveMerchantRule(
+          keyword: keyword,
+          cleanName: cleanMerchantName,
+          category: category,
+        );
+      }
+    } catch (_) {}
   }
 
   /// Manually trigger a transaction sync from the backend edge function.
@@ -368,11 +433,21 @@ final transactionFeedProvider =
 
 /// Derived provider: whether more paginated transactions exist to load from database
 final hasMoreTransactionsProvider = Provider<bool>((ref) {
-  return ref.watch(transactionFeedProvider.notifier).hasMore;
+  final transactions = ref.watch(transactionFeedProvider).value ?? [];
+  final notifier = ref.watch(transactionFeedProvider.notifier);
+
+  // If current list has fewer transactions than a full page, all are loaded
+  if (transactions.isNotEmpty &&
+      transactions.length < TransactionFeedNotifier.defaultPageSize) {
+    return false;
+  }
+
+  return notifier.hasMore;
 });
 
 /// Derived provider: whether earlier transactions are currently being fetched
 final isLoadingMoreTransactionsProvider = Provider<bool>((ref) {
+  ref.watch(transactionFeedProvider);
   return ref.watch(transactionFeedProvider.notifier).isLoadingMore;
 });
 
@@ -388,20 +463,78 @@ final latestBalanceProvider = Provider<double>((ref) {
   return transactions.first.currentBalance;
 });
 
-/// Derived provider: stats for the last 7 days (spent vs. inflow)
-final weeklyStatsProvider = Provider<({double spent, double inflow})>((ref) {
+/// Derived provider: stats for the active weekly window (spent vs. inflow)
+final weeklyStatsProvider =
+    Provider<({double spent, double inflow, String periodLabel, bool isLive})>((ref) {
   final transactions = ref.watch(transactionFeedProvider).value ?? [];
-  final sevenDaysAgo = DateTime.now().subtract(const Duration(days: 7));
+  if (transactions.isEmpty) {
+    return (spent: 0.0, inflow: 0.0, periodLabel: 'this week', isLive: true);
+  }
 
-  final spent = transactions
-      .where((t) => t.isDebit && t.transactionTimestamp.isAfter(sevenDaysAgo))
+  final now = DateTime.now();
+  DateTime latestTxnDate = transactions.first.transactionTimestamp;
+  for (final t in transactions) {
+    if (t.transactionTimestamp.isAfter(latestTxnDate)) {
+      latestTxnDate = t.transactionTimestamp;
+    }
+  }
+
+  // Live if latest transaction is within 7 days of now
+  final isLive = now.difference(latestTxnDate).inDays.abs() <= 7;
+  final anchorDate = isLive ? now : latestTxnDate;
+  final sevenDaysBefore = anchorDate.subtract(const Duration(days: 7));
+
+  var spent = transactions
+      .where((t) =>
+          t.isDebit &&
+          t.transactionTimestamp.isAfter(sevenDaysBefore) &&
+          !t.transactionTimestamp.isAfter(anchorDate))
       .fold(0.0, (acc, t) => acc + t.amount);
 
-  final inflow = transactions
-      .where((t) => t.isCredit && t.transactionTimestamp.isAfter(sevenDaysAgo))
+  var inflow = transactions
+      .where((t) =>
+          t.isCredit &&
+          t.transactionTimestamp.isAfter(sevenDaysBefore) &&
+          !t.transactionTimestamp.isAfter(anchorDate))
       .fold(0.0, (acc, t) => acc + t.amount);
 
-  return (spent: spent, inflow: inflow);
+  const shortMonths = [
+    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+  ];
+
+  String label;
+  if (isLive) {
+    label = 'this week';
+  } else {
+    final startFmt = '${sevenDaysBefore.day} ${shortMonths[sevenDaysBefore.month - 1]}';
+    final endFmt = '${anchorDate.day} ${shortMonths[anchorDate.month - 1]} ${anchorDate.year}';
+    label = '$startFmt – $endFmt';
+  }
+
+  if (spent == 0.0 && inflow == 0.0) {
+    final monthStart = DateTime(anchorDate.year, anchorDate.month, 1);
+    final monthEnd = DateTime(anchorDate.year, anchorDate.month + 1, 1);
+    spent = transactions
+        .where((t) =>
+            t.isDebit &&
+            !t.transactionTimestamp.isBefore(monthStart) &&
+            t.transactionTimestamp.isBefore(monthEnd))
+        .fold(0.0, (acc, t) => acc + t.amount);
+    inflow = transactions
+        .where((t) =>
+            t.isCredit &&
+            !t.transactionTimestamp.isBefore(monthStart) &&
+            t.transactionTimestamp.isBefore(monthEnd))
+        .fold(0.0, (acc, t) => acc + t.amount);
+    if (isLive) {
+      label = 'this month';
+    } else {
+      label = '${shortMonths[anchorDate.month - 1]} ${anchorDate.year}';
+    }
+  }
+
+  return (spent: spent, inflow: inflow, periodLabel: label, isLive: isLive);
 });
 
 /// Derived provider: transactions grouped by timeline section (legacy format)
@@ -490,4 +623,58 @@ final smartGroupedTransactionsProvider = Provider<List<YearGroup>>((ref) {
     typeFilter: typeFilter,
     selectedYear: selectedYear,
   );
+});
+
+/// AsyncNotifier managing active AI proactive nudges for the carousel
+class AiNudgesNotifier extends AsyncNotifier<List<AiNudge>> {
+  @override
+  Future<List<AiNudge>> build() async {
+    ref.watch(currentUserProvider);
+    final dbService = ref.watch(supabaseDbServiceProvider);
+    return await dbService.fetchActiveNudges();
+  }
+
+  Future<void> dismiss(String nudgeId) async {
+    final currentList = state.value ?? [];
+    state = AsyncValue.data(currentList.where((n) => n.id != nudgeId).toList());
+    final dbService = ref.read(supabaseDbServiceProvider);
+    await dbService.dismissNudge(nudgeId);
+  }
+
+  Future<void> refresh() async {
+    state = const AsyncValue.loading();
+    state = await AsyncValue.guard(() async {
+      final dbService = ref.read(supabaseDbServiceProvider);
+      return await dbService.fetchActiveNudges();
+    });
+  }
+}
+
+final aiNudgesProvider =
+    AsyncNotifierProvider<AiNudgesNotifier, List<AiNudge>>(AiNudgesNotifier.new);
+
+/// Telemetry filter period index (0: 'all', 1: 'month', 2: '7d', 3: 'debits', 4: 'inflow')
+class TelemetryPeriodIndexNotifier extends Notifier<int> {
+  @override
+  int build() => 0;
+
+  @override
+  int get state => super.state;
+  @override
+  set state(int value) => super.state = value;
+}
+
+final telemetryPeriodIndexProvider =
+    NotifierProvider<TelemetryPeriodIndexNotifier, int>(
+        TelemetryPeriodIndexNotifier.new);
+
+/// Telemetry metrics provider delivering real SQL aggregations from get_telemetry_metrics RPC
+final telemetryMetricsProvider = FutureProvider<Map<String, dynamic>?>((ref) async {
+  final filterIndex = ref.watch(telemetryPeriodIndexProvider);
+  const periods = ['all', 'month', '7d', 'debits', 'inflow'];
+  final period = (filterIndex >= 0 && filterIndex < periods.length) ? periods[filterIndex] : 'all';
+  ref.watch(currentUserProvider);
+  ref.watch(transactionFeedProvider);
+  final dbService = ref.watch(supabaseDbServiceProvider);
+  return await dbService.fetchTelemetryMetrics(period: period);
 });

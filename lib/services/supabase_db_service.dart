@@ -1,6 +1,8 @@
 import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../config/supabase_config.dart';
+import '../models/ai_nudge_model.dart';
+import '../models/chat_message_model.dart';
 import '../models/merchant_category_model.dart';
 import '../models/transaction_model.dart';
 import 'setu_aa_service.dart';
@@ -374,6 +376,77 @@ class SupabaseDbService {
     }
   }
 
+  /// Updates the category for a specific transaction in public.bank_transactions
+  Future<void> updateTransactionCategory({
+    required String txnId,
+    required String category,
+  }) async {
+    final client = _effectiveClient;
+    final uid = currentUserId;
+    if (client == null || uid == null) return;
+
+    try {
+      await client
+          .from('bank_transactions')
+          .update({'category': category})
+          .eq('user_id', uid)
+          .eq('txn_id', txnId);
+      debugPrint('[Supabase DB] Updated category for $txnId to $category');
+    } catch (e) {
+      debugPrint('[Supabase DB] Error updating transaction category: $e');
+    }
+  }
+
+  /// Updates all stored transactions matching a merchant name with the given category
+  Future<void> updateAllTransactionsCategoryByMerchant({
+    required String cleanMerchantName,
+    required String category,
+  }) async {
+    final client = _effectiveClient;
+    final uid = currentUserId;
+    if (client == null || uid == null) return;
+
+    try {
+      await client
+          .from('bank_transactions')
+          .update({'category': category})
+          .eq('user_id', uid)
+          .ilike('clean_merchant_name', cleanMerchantName.trim());
+      debugPrint('[Supabase DB] Bulk updated category for $cleanMerchantName to $category');
+    } catch (e) {
+      debugPrint('[Supabase DB] Error bulk updating merchant category: $e');
+    }
+  }
+
+  /// Persists a merchant categorization rule to public.merchant_categories
+  Future<void> saveMerchantRule({
+    required String keyword,
+    required String cleanName,
+    required String category,
+    String? icon,
+  }) async {
+    final rule = MerchantCategoryRule(
+      keyword: keyword.toLowerCase().trim(),
+      cleanName: cleanName.trim(),
+      category: category.trim(),
+      icon: icon,
+    );
+    MerchantCategoryRegistry.instance.addRule(rule);
+
+    final client = _effectiveClient;
+    if (client == null) return;
+
+    try {
+      await client.from('merchant_categories').upsert(
+            rule.toJson(),
+            onConflict: 'keyword',
+          );
+      debugPrint('[Supabase DB] Persisted merchant rule for $keyword -> $category');
+    } catch (e) {
+      debugPrint('[Supabase DB] Error saving merchant rule: $e');
+    }
+  }
+
   /// Triggers server-side Setu AA data session creation, polling, ReBIT parsing,
   /// and database upserts via the `sync-transactions` Supabase Edge Function.
   Future<Map<String, dynamic>> triggerBackendSync({String? consentId}) async {
@@ -470,5 +543,142 @@ class SupabaseDbService {
         : Map<String, dynamic>.from(response.data as Map);
 
     return (data['status']?.toString() ?? 'PENDING').toUpperCase();
+  }
+
+  // ===========================================================================
+  // 6. SETTHI AI CREDITS & CHAT HISTORY
+  // ===========================================================================
+
+  /// Fetches the user's current remaining AI credits from public.profiles
+  Future<int> fetchAiCredits() async {
+    final client = _effectiveClient;
+    final uid = currentUserId;
+    if (client == null || uid == null) return 3;
+
+    try {
+      final data = await client
+          .from('profiles')
+          .select('ai_credits')
+          .eq('id', uid)
+          .maybeSingle();
+
+      if (data != null && data['ai_credits'] != null) {
+        return (data['ai_credits'] as num).toInt();
+      }
+      return 3;
+    } on PostgrestException catch (e) {
+      if (e.code == '42703' || e.code == 'PGRST205') {
+        debugPrint('[Supabase DB] Note: ai_credits column not yet migrated in public.profiles. Defaulting to 3 credits.');
+      } else {
+        debugPrint('[Supabase DB] Error fetching AI credits: ${e.message}');
+      }
+      return 3;
+    } catch (e) {
+      debugPrint('[Supabase DB] Error fetching AI credits: $e');
+      return 3;
+    }
+  }
+
+  /// Fetches past conversation messages between the user and Setthi AI
+  Future<List<ChatMessage>> fetchChatHistory({int limit = 50}) async {
+    final client = _effectiveClient;
+    final uid = currentUserId;
+    if (client == null || uid == null) return [];
+
+    try {
+      final List<dynamic> rows = await client
+          .from('chat_messages')
+          .select('*')
+          .eq('user_id', uid)
+          .order('created_at', ascending: true)
+          .limit(limit);
+
+      return rows
+          .map((row) => ChatMessage.fromJson(row as Map<String, dynamic>))
+          .toList();
+    } on PostgrestException catch (e) {
+      if (e.code == 'PGRST205' || e.code == '42P01') {
+        debugPrint('[Supabase DB] Note: chat_messages table not yet migrated in DB. Returning empty history.');
+      } else {
+        debugPrint('[Supabase DB] Error fetching chat history: ${e.message}');
+      }
+      return [];
+    } catch (e) {
+      debugPrint('[Supabase DB] Error fetching chat history: $e');
+      return [];
+    }
+  }
+
+  // ===========================================================================
+  // 6. AI NUDGES & DETERMINISTIC TELEMETRY
+  // ===========================================================================
+
+  /// Fetches active (undismissed) AI proactive nudges for the carousel
+  Future<List<AiNudge>> fetchActiveNudges() async {
+    final client = _effectiveClient;
+    final uid = currentUserId;
+    if (client == null || uid == null) return [];
+
+    try {
+      final List<dynamic> rows = await client
+          .from('ai_nudges')
+          .select('*')
+          .eq('user_id', uid)
+          .eq('is_dismissed', false)
+          .order('created_at', ascending: false)
+          .limit(10);
+
+      return rows
+          .map((row) => AiNudge.fromJson(row as Map<String, dynamic>))
+          .toList();
+    } catch (e) {
+      debugPrint('[Supabase DB] Error fetching active nudges: $e');
+      return [];
+    }
+  }
+
+  /// Dismisses an AI nudge
+  Future<bool> dismissNudge(String nudgeId) async {
+    final client = _effectiveClient;
+    final uid = currentUserId;
+    if (client == null || uid == null) return false;
+
+    try {
+      await client
+          .from('ai_nudges')
+          .update({'is_dismissed': true})
+          .eq('id', nudgeId)
+          .eq('user_id', uid);
+      return true;
+    } catch (e) {
+      debugPrint('[Supabase DB] Error dismissing nudge $nudgeId: $e');
+      return false;
+    }
+  }
+
+  /// Fetches real telemetry aggregations from the deterministic RPC get_telemetry_metrics
+  Future<Map<String, dynamic>?> fetchTelemetryMetrics({String period = 'all'}) async {
+    final client = _effectiveClient;
+    final uid = currentUserId;
+    if (client == null || uid == null) return null;
+
+    try {
+      final res = await client.rpc(
+        'get_telemetry_metrics',
+        params: {
+          'p_user_id': uid,
+          'p_period': period,
+        },
+      );
+      if (res is Map<String, dynamic>) {
+        return res;
+      } else if (res is Map) {
+        return Map<String, dynamic>.from(res);
+      }
+      return null;
+    } catch (e) {
+      debugPrint('[Supabase DB] Error fetching telemetry metrics for $period: $e');
+      return null;
+    }
   }
 }

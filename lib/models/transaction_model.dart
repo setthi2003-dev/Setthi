@@ -28,6 +28,8 @@ class BankTransaction {
   final String narration;
   final String? category;
   final String? precomputedMerchantName;
+  final String? spendTier;
+  final bool isRecurring;
 
   const BankTransaction({
     required this.txnId,
@@ -39,6 +41,8 @@ class BankTransaction {
     required this.narration,
     this.category,
     this.precomputedMerchantName,
+    this.spendTier,
+    this.isRecurring = false,
   });
 
   bool get isCredit => type == TransactionType.credit;
@@ -64,6 +68,7 @@ class BankTransaction {
       'P2A', 'P2P', 'TRF', 'BIL', 'INB', 'MB', 'MOB', 'REV', 'RET',
       'CHQ', 'CLR', 'PAYMENT', 'TRANSFER', 'PURCHASE', 'DEPOSIT',
       'WITHDRAWAL', 'SETU', 'REFUND', 'BANK',
+      'OTHER', 'OTHERS', 'MISC',
     };
 
     // 2. Structured slash-separated Indian banking narrations:
@@ -218,6 +223,22 @@ class BankTransaction {
     if (lower.contains('salary') || lower.contains('stipend')) return Icons.account_balance_wallet_rounded;
     if (lower.contains('amazon') || lower.contains('myntra')) return Icons.shopping_bag_rounded;
     if (lower.contains('cult')) return Icons.fitness_center_rounded;
+
+    // Smart category-based icon fallback
+    final cat = (category ?? '').toLowerCase();
+    if (cat.contains('food') || cat.contains('dining')) return Icons.restaurant_rounded;
+    if (cat.contains('grocer')) return Icons.shopping_basket_rounded;
+    if (cat.contains('transport') || cat.contains('travel')) return Icons.local_taxi_rounded;
+    if (cat.contains('shop')) return Icons.shopping_bag_rounded;
+    if (cat.contains('entertain') || cat.contains('movie') || cat.contains('ott')) return Icons.movie_filter_rounded;
+    if (cat.contains('cafe') || cat.contains('coffee')) return Icons.coffee_rounded;
+    if (cat.contains('fitness') || cat.contains('health')) return Icons.fitness_center_rounded;
+    if (cat.contains('bill') || cat.contains('utilit')) return Icons.bolt_rounded;
+    if (cat.contains('subscript') || cat.contains('tech')) return Icons.devices_rounded;
+    if (cat.contains('income') || cat.contains('salary')) return Icons.account_balance_wallet_rounded;
+    if (cat.contains('transfer') || cat.contains('upi')) return Icons.swap_horiz_rounded;
+    if (cat.contains('education') || cat.contains('learning')) return Icons.school_rounded;
+
     if (isCredit) return Icons.arrow_downward_rounded;
     return Icons.arrow_upward_rounded;
   }
@@ -236,6 +257,21 @@ class BankTransaction {
     if (lower.contains('starbucks') || lower.contains('coffee')) return const Color(0xFF00704A);
     if (lower.contains('splitwise')) return const Color(0xFF5BC5A7); // Splitwise Teal
     if (lower.contains('salary') || lower.contains('stipend')) return const Color(0xFF00FFA3); // Neon Mint
+
+    // Category-based color fallback
+    final cat = (category ?? '').toLowerCase();
+    if (cat.contains('food') || cat.contains('dining')) return const Color(0xFFFC8019);
+    if (cat.contains('grocer')) return const Color(0xFF10B981);
+    if (cat.contains('transport') || cat.contains('travel')) return const Color(0xFF00C8FF);
+    if (cat.contains('shop')) return const Color(0xFFA78BFA);
+    if (cat.contains('entertain')) return const Color(0xFFE50914);
+    if (cat.contains('cafe') || cat.contains('coffee')) return const Color(0xFF00704A);
+    if (cat.contains('fitness') || cat.contains('health')) return const Color(0xFF34D399);
+    if (cat.contains('bill') || cat.contains('utilit')) return const Color(0xFFFBBF24);
+    if (cat.contains('subscript') || cat.contains('tech')) return const Color(0xFF818CF8);
+    if (cat.contains('income') || cat.contains('salary')) return const Color(0xFF00FFA3);
+    if (cat.contains('transfer')) return const Color(0xFF38BDF8);
+
     return isCredit ? const Color(0xFF00FFA3) : const Color(0xFFA78BFA);
   }
 
@@ -312,6 +348,9 @@ class BankTransaction {
         ? parsedCleanName.toString()
         : matchedRule?.cleanName;
 
+    final parsedSpendTier = json['spend_tier'] ?? json['spendTier'];
+    final parsedIsRecurring = json['is_recurring'] ?? json['isRecurring'];
+
     return BankTransaction(
       txnId: rawTxnId,
       type: TransactionType.fromString(rawType),
@@ -322,6 +361,8 @@ class BankTransaction {
       narration: rawNarration,
       category: finalCategory,
       precomputedMerchantName: finalCleanName,
+      spendTier: parsedSpendTier?.toString(),
+      isRecurring: parsedIsRecurring == true || parsedIsRecurring == 'true',
     );
   }
 
@@ -336,6 +377,8 @@ class BankTransaction {
       'narration': narration,
       if (category != null) 'category': category,
       'clean_merchant_name': cleanMerchantName,
+      if (spendTier != null) 'spend_tier': spendTier,
+      'is_recurring': isRecurring,
     };
   }
 
@@ -349,6 +392,8 @@ class BankTransaction {
     String? narration,
     String? category,
     String? precomputedMerchantName,
+    String? spendTier,
+    bool? isRecurring,
   }) {
     return BankTransaction(
       txnId: txnId ?? this.txnId,
@@ -360,6 +405,8 @@ class BankTransaction {
       narration: narration ?? this.narration,
       category: category ?? this.category,
       precomputedMerchantName: precomputedMerchantName ?? this.precomputedMerchantName,
+      spendTier: spendTier ?? this.spendTier,
+      isRecurring: isRecurring ?? this.isRecurring,
     );
   }
 }

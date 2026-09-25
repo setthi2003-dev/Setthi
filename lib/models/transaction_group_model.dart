@@ -11,6 +11,7 @@ enum TransactionTypeFilter {
   all,
   debitOnly,
   creditOnly,
+  untagged,
 }
 
 /// Represents transactions occurring on a single calendar day
@@ -133,6 +134,11 @@ List<YearGroup> groupTransactionsSmartly({
   final filtered = transactions.where((t) {
     if (typeFilter == TransactionTypeFilter.debitOnly && !t.isDebit) return false;
     if (typeFilter == TransactionTypeFilter.creditOnly && !t.isCredit) return false;
+    if (typeFilter == TransactionTypeFilter.untagged &&
+        t.category != null &&
+        t.category!.trim().isNotEmpty) {
+      return false;
+    }
     if (selectedYear != null && t.transactionTimestamp.year != selectedYear) return false;
     return true;
   }).toList();

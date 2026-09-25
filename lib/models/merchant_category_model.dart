@@ -81,6 +81,12 @@ class MerchantCategoryRegistry {
     }
   }
 
+  /// Adds or prepends a new rule dynamically to the in-memory registry
+  void addRule(MerchantCategoryRule rule) {
+    _rules.removeWhere((r) => r.keyword == rule.keyword.toLowerCase().trim());
+    _rules.insert(0, rule);
+  }
+
   /// Attempts to match a narration against known merchant rules.
   /// Returns [MerchantCategoryRule] if a match is found, or `null` if unmatched.
   MerchantCategoryRule? findMatch(String narration) {

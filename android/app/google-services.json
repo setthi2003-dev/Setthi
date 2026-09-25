@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "399589665504",
+    "project_id": "stthi-4fb6b",
+    "storage_bucket": "stthi-4fb6b.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:399589665504:android:8b5aa67a3402ce2ca8be85",
+        "android_client_info": {
+          "package_name": "com.app.setthi"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDtHGeCiRbhO9lHJiHqNd3YlmdA7sdxoeQ"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
