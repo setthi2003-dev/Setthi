@@ -5,6 +5,9 @@ class LegalConfig {
   /// Official Website
   static const String websiteUrl = 'https://setthi.in';
 
+  /// Central Legal Hub
+  static const String legalHubUrl = 'https://setthi.in/legal';
+
   /// Terms of Service
   static const String termsOfServiceUrl = 'https://setthi.in/terms';
 
@@ -15,7 +18,7 @@ class LegalConfig {
   static const String eulaUrl = 'https://setthi.in/eula';
 
   /// DPDP Statutory Consent Notice
-  static const String consentNoticeUrl = 'https://setthi.in#document-3--dpdp-statutory-consent-notice';
+  static const String consentNoticeUrl = 'https://setthi.in/legal';
 
   /// Grievance & Compliance Email
   static const String supportEmail = 'setthi2003@gmail.com';
