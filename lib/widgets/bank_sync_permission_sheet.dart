@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import '../config/dpc_tokens.dart';
 import 'slide_to_confirm.dart';
@@ -43,35 +44,42 @@ class BankSyncPermissionSheet extends StatefulWidget {
 
 class _BankSyncPermissionSheetState extends State<BankSyncPermissionSheet> {
   int _currentStep = 0;
+  bool _isSyncing = false;
   bool _isSuccess = false;
   String? _errorMessage;
+  Timer? _stepTimer;
 
   final List<String> _syncSteps = [
     'Verifying active Account Aggregator consent...',
     'Creating secure data session with bank...',
     'Downloading & decrypting transactions...',
+    'Organizing categories & computing analytics...',
   ];
 
   Future<void> _handleSliderConfirmed() async {
     setState(() {
       _currentStep = 0;
+      _isSyncing = true;
       _errorMessage = null;
     });
 
-    // Step 1: Initiating
-    await Future.delayed(const Duration(milliseconds: 600));
-    if (!mounted) return;
-    setState(() => _currentStep = 1);
-
-    // Step 2: In progress
-    await Future.delayed(const Duration(milliseconds: 700));
-    if (!mounted) return;
-    setState(() => _currentStep = 2);
+    _stepTimer?.cancel();
+    _stepTimer = Timer.periodic(const Duration(milliseconds: 2500), (timer) {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
+      if (_currentStep < _syncSteps.length - 1) {
+        setState(() => _currentStep++);
+      }
+    });
 
     try {
       await widget.onSyncRequested();
+      _stepTimer?.cancel();
       if (!mounted) return;
       setState(() {
+        _isSyncing = false;
         _isSuccess = true;
       });
       await Future.delayed(const Duration(milliseconds: 700));
@@ -79,13 +87,20 @@ class _BankSyncPermissionSheetState extends State<BankSyncPermissionSheet> {
         Navigator.of(context).pop(true);
       }
     } catch (e) {
+      _stepTimer?.cancel();
       if (mounted) {
         setState(() {
+          _isSyncing = false;
           _errorMessage = e.toString().replaceFirst('Exception: ', '');
         });
       }
-      rethrow;
     }
+  }
+
+  @override
+  void dispose() {
+    _stepTimer?.cancel();
+    super.dispose();
   }
 
   @override
@@ -277,6 +292,58 @@ class _BankSyncPermissionSheetState extends State<BankSyncPermissionSheet> {
                         color: DpcColors.textPrimary,
                         fontSize: 14,
                         fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
+                ),
+              )
+            else if (_isSyncing)
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: DpcColors.bgOled,
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(
+                    color: DpcColors.accentPositive.withValues(alpha: 0.3),
+                  ),
+                ),
+                child: Column(
+                  children: [
+                    Row(
+                      children: [
+                        const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            valueColor: AlwaysStoppedAnimation<Color>(
+                              DpcColors.accentPositive,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Text(
+                            _syncSteps[_currentStep],
+                            style: const TextStyle(
+                              color: DpcColors.textPrimary,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(4),
+                      child: const LinearProgressIndicator(
+                        minHeight: 3,
+                        backgroundColor: DpcColors.surfaceTrack,
+                        valueColor: AlwaysStoppedAnimation<Color>(
+                          DpcColors.accentPositive,
+                        ),
                       ),
                     ),
                   ],

@@ -227,20 +227,43 @@ Deno.serve(async (req: Request) => {
       },
     });
 
-    // 6. Instant Memory Snapshot Injection
+    // 6. Instant Memory Snapshot Injection & Temporal Grounding
     let snapshotText = "No prior transactions available.";
+    let latestTxnDateStr = "";
+    let sevenDaysPriorStr = "";
+    let latestTxnFormatted = "";
+
     try {
-      const [snapRes, safeRes] = await Promise.all([
+      const [snapRes, safeRes, latestTxnRes] = await Promise.all([
         supabase
           .from("user_financial_snapshot")
           .select("*")
           .eq("user_id", user.id)
           .maybeSingle(),
         supabase.rpc("get_safe_to_spend", { p_user_id: user.id }),
+        supabase
+          .from("bank_transactions")
+          .select("transaction_timestamp")
+          .eq("user_id", user.id)
+          .order("transaction_timestamp", { ascending: false })
+          .limit(1)
+          .maybeSingle(),
       ]);
 
       const snap = snapRes.data;
       const safe = safeRes.data;
+      const latestTxn = latestTxnRes.data;
+
+      if (latestTxn?.transaction_timestamp) {
+        const d = new Date(latestTxn.transaction_timestamp);
+        latestTxnDateStr = d.toISOString().split("T")[0];
+        sevenDaysPriorStr = new Date(d.getTime() - 7 * 86400000).toISOString().split("T")[0];
+        latestTxnFormatted = d.toLocaleDateString("en-IN", {
+          day: "2-digit",
+          month: "short",
+          year: "numeric",
+        });
+      }
 
       if (snap) {
         const bal = Number(snap.current_balance ?? 0).toLocaleString("en-IN");
@@ -251,7 +274,7 @@ Deno.serve(async (req: Request) => {
         const safeSpend = safe?.safe_to_spend_daily != null
           ? Number(safe.safe_to_spend_daily).toLocaleString("en-IN")
           : "N/A";
-        const periodLabel = snap.is_live_data ? "Past 7 Days" : (snap.statement_period_label ?? "Statement Period");
+        const periodLabel = snap.is_live_data ? "Past 7 Days" : (snap.statement_period_label ?? `Up to ${latestTxnFormatted}`);
 
         snapshotText = `Current Balance: ₹${bal}, Active Window: ${periodLabel} (${snap.is_live_data ? "LIVE" : "HISTORICAL STATEMENT"}), 7-day spend: ₹${spent}, 7-day inflow: ₹${inflow} (Top: ${topCat}), Impulse Ratio: ${ratio}%, Daily Safe Spend: ₹${safeSpend}.`;
       }
@@ -262,6 +285,7 @@ Deno.serve(async (req: Request) => {
     // 7. Assemble Gemini Prompt & Instructions
     const nowIso = new Date().toISOString();
     const istTime = new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" });
+    const currentYear = new Date().getFullYear();
 
     const systemInstruction = {
       role: "system",
@@ -270,20 +294,37 @@ Deno.serve(async (req: Request) => {
           text: `You are Setthi AI, a witty, empathetic, candid Gen Z personal finance companion (inspired by Cleo).
 You talk like a savvy, candid best friend who helps the user understand their money with light humor, emojis, and real talk.
 Always format currency in Indian Rupee format (₹X,XXX).
-Current Date & Time in India (IST): ${istTime} (ISO: ${nowIso}).
+Current Clock Time in India (IST): ${istTime} (ISO: ${nowIso}).
 
 USER FINANCIAL SNAPSHOT (0ms Instant Memory):
 ${snapshotText}
 
-CRITICAL RULES:
-1. You already know these baseline stats from the user's snapshot above! For casual greetings (e.g., "Hi", "How am I doing?", "How's my balance?"), directly reference these baseline snapshot stats with conversational flair. DO NOT invoke tools for casual greetings or basic balance queries unless the user asks for a specific date range, category breakdown, or updated transaction details.
-2. NEVER guess, estimate, or hallucinate financial amounts not in the snapshot or tool outputs.
-3. If the user asks how much they can safely spend, call \`get_safe_to_spend\`.
-4. If the user asks about recurring costs, subscriptions, or fixed bills, call \`detect_recurring_costs\`.
-5. If the user asks about burn rate, cash flow velocity, or runway, call \`get_cashflow_velocity\`.
-6. If the user asks for category or merchant spending breakdown, call \`get_spending_summary\`.
-7. If the user asks for recent purchases or account activity, call \`list_recent_transactions\`.
-8. Keep your final answers punchy, helpful, formatted with clean bullets if listing items, and never more than 2-3 short paragraphs.
+TEMPORAL CONTEXT & ANTI-HALLUCINATION RULES (CRITICAL):
+1. Statement vs Live Data:
+   ${latestTxnDateStr ? `- The user's account contains data from an imported STATEMENT where the latest transaction date is ${latestTxnFormatted} (${latestTxnDateStr}).
+   - When the user asks relative time queries like "this week", "lately", "recently", "past 7 days", or "this month":
+     * NEVER evaluate against the real-world current year (${currentYear}).
+     * Anchor your query and explanation to the STATEMENT PERIOD (ending on ${latestTxnFormatted}).
+     * When invoking tools like \`get_spending_summary\` with date filters for relative time ("this week", "recently"), use start_date: "${sevenDaysPriorStr}" and end_date: "${latestTxnDateStr}", NOT current calendar dates!
+     * In your answer, ALWAYS explicitly clarify the timeframe to the user (e.g., "Looking at your statement for ${snapshotText.includes('Active Window:') ? snapshotText.split('Active Window: ')[1].split(' (')[0] : latestTxnFormatted}...").
+     * NEVER tell the user that historical transactions or inflows from ${latestTxnDateStr.slice(0, 4)} occurred "this week" or "today" in real life.` : `- The user's account is live. Answer relative queries against current dates.`}
+2. Grounded Figures: NEVER guess, estimate, or hallucinate financial amounts not in the snapshot or tool outputs.
+
+HANDLING NON-EXISTENT DATA & ZERO RESULTS (CRITICAL):
+1. If a tool returns 0 records, 0 spend, or empty lists (e.g. user asks for "top 3 food orders", "Swiggy", or a merchant/category with no matching records):
+   - You MUST respond with a clear, helpful, transparent assistant message.
+   - NEVER return an empty message, never give a blank bubble, and never fail silently.
+   - Candidly explain that no transactions matching that category or merchant were found in their statement/history.
+   - Mention what types of transactions ARE found in their statement (e.g., peer-to-peer transfers, travel, or general debits) so the user gets complete clarity.
+
+TOOL USAGE PROTOCOL:
+1. For casual greetings or basic balance queries, directly reference the snapshot stats.
+2. If the user asks how much they can safely spend, call \`get_safe_to_spend\`.
+3. If the user asks about recurring costs, subscriptions, or fixed bills, call \`detect_recurring_costs\`.
+4. If the user asks about burn rate, cash flow velocity, or runway, call \`get_cashflow_velocity\`.
+5. If the user asks for category or merchant spending breakdown, call \`get_spending_summary\`.
+6. If the user asks for recent purchases or account activity, call \`list_recent_transactions\`.
+7. Keep your final answers punchy, helpful, formatted with clean bullets if listing items, and never more than 2-3 short paragraphs.
 
 GENERATIVE UI PROTOCOL:
 When summarizing cash flow, budgets, safe-to-spend, or category breakdowns, output a hidden UI widget tag at the very end of your message in this format:
@@ -463,18 +504,40 @@ Use it only when visual summary aids understanding. Ensure valid JSON inside the
     // 8. Stream Final Response with Server-Sent Events (SSE)
     const streamEndpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:streamGenerateContent?alt=sse&key=${geminiApiKey}`;
 
-    const geminiStreamRes = await fetch(streamEndpoint, {
+    // Pass tools with mode: "NONE" so Gemini is forced to generate a textual synthesis
+    // and does not fail due to missing tool declarations in a multi-turn conversation.
+    const streamPayload: Record<string, unknown> = {
+      contents,
+      systemInstruction,
+      tools: geminiTools,
+      toolConfig: {
+        functionCallingConfig: {
+          mode: "NONE",
+        },
+      },
+      generationConfig: {
+        temperature: 0.7,
+        maxOutputTokens: 800,
+      },
+    };
+
+    let geminiStreamRes = await fetch(streamEndpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents,
-        systemInstruction,
-        generationConfig: {
-          temperature: 0.7,
-          maxOutputTokens: 800,
-        },
-      }),
+      body: JSON.stringify(streamPayload),
     });
+
+    // Fallback if mode: "NONE" is rejected by the streaming endpoint
+    if (!geminiStreamRes.ok) {
+      console.warn(`[chat-assistant] Stream with toolConfig failed (${geminiStreamRes.status}), retrying without toolConfig...`);
+      delete streamPayload.toolConfig;
+      delete streamPayload.tools;
+      geminiStreamRes = await fetch(streamEndpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(streamPayload),
+      });
+    }
 
     if (!geminiStreamRes.ok) {
       const errText = await geminiStreamRes.text();
@@ -515,15 +578,17 @@ Use it only when visual summary aids understanding. Ensure valid JSON inside the
                 try {
                   const parsed = JSON.parse(jsonStr);
                   const candidate = parsed.candidates?.[0];
-                  const textChunk = candidate?.content?.parts?.[0]?.text;
+                  const parts = candidate?.content?.parts ?? [];
 
-                  if (textChunk) {
-                    accumulatedText += textChunk;
-                    controller.enqueue(
-                      encoder.encode(
-                        `data: ${JSON.stringify({ text: textChunk, done: false })}\n\n`
-                      )
-                    );
+                  for (const part of parts) {
+                    if (part.text) {
+                      accumulatedText += part.text;
+                      controller.enqueue(
+                        encoder.encode(
+                          `data: ${JSON.stringify({ text: part.text, done: false })}\n\n`
+                        )
+                      );
+                    }
                   }
                 } catch (_) {
                   // Non-JSON line or keep-alive
@@ -532,30 +597,45 @@ Use it only when visual summary aids understanding. Ensure valid JSON inside the
             }
           }
 
-          // Stream completed: Deduct 1 credit atomically
-          let remainingCredits = currentCredits - 1;
-          try {
-            const { data: deducted } = await supabase.rpc("deduct_ai_credit", {
-              p_user_id: user.id,
-            });
-
-            if (deducted) {
-              const { data: updatedProfile } = await supabase
-                .from("profiles")
-                .select("ai_credits")
-                .eq("id", user.id)
-                .maybeSingle();
-
-              if (updatedProfile?.ai_credits !== undefined) {
-                remainingCredits = updatedProfile.ai_credits;
-              }
-            }
-          } catch (deductErr) {
-            console.error("[chat-assistant] Failed to deduct credit:", deductErr);
+          // Fallback: Ensure the user NEVER receives an empty bubble or empty result
+          if (accumulatedText.trim().length === 0) {
+            const periodStr = snapshotText.includes("Active Window: ")
+              ? snapshotText.split("Active Window: ")[1].split(" (")[0]
+              : (latestTxnFormatted ? `up to ${latestTxnFormatted}` : "recent activity");
+            const fallbackText = `I reviewed your statement (${periodStr}), but couldn't find any records matching that request. Most of your recorded transactions are peer-to-peer transfers or general expenses.`;
+            accumulatedText = fallbackText;
+            controller.enqueue(
+              encoder.encode(
+                `data: ${JSON.stringify({ text: fallbackText, done: false })}\n\n`
+              )
+            );
           }
 
-          // Persist the completed assistant message to chat_messages
+          // Stream completed: Deduct 1 credit atomically ONLY if response was provided
+          let remainingCredits = currentCredits;
           if (accumulatedText.trim().length > 0) {
+            try {
+              const { data: deducted } = await supabase.rpc("deduct_ai_credit", {
+                p_user_id: user.id,
+              });
+
+              if (deducted) {
+                remainingCredits = Math.max(0, currentCredits - 1);
+                const { data: updatedProfile } = await supabase
+                  .from("profiles")
+                  .select("ai_credits")
+                  .eq("id", user.id)
+                  .maybeSingle();
+
+                if (updatedProfile?.ai_credits !== undefined) {
+                  remainingCredits = updatedProfile.ai_credits;
+                }
+              }
+            } catch (deductErr) {
+              console.error("[chat-assistant] Failed to deduct credit:", deductErr);
+            }
+
+            // Persist the completed assistant message to chat_messages
             const assistantMetadata = {
               model: "gemini-3.6-flash",
               latency_ms: Date.now() - startTimeMs,

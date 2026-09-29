@@ -26,7 +26,7 @@ class SetuConfig {
 
   static const String redirectUrl = String.fromEnvironment(
     'SETU_REDIRECT_URL',
-    defaultValue: 'https://www.joinmandala.in/',
+    defaultValue: 'https://setthi.in/',
   );
 
   /// Standard Setu ReBIT AA Gateway authentication headers

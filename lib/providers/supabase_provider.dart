@@ -18,3 +18,10 @@ final supabaseDbServiceProvider = Provider<SupabaseDbService>((ref) {
   final client = ref.watch(supabaseClientProvider);
   return SupabaseDbService(client: client);
 });
+
+/// Riverpod provider for fetching the current user's profile from public.profiles
+final userProfileProvider = FutureProvider<Map<String, dynamic>?>((ref) async {
+  final dbService = ref.watch(supabaseDbServiceProvider);
+  return dbService.fetchProfile();
+});
+

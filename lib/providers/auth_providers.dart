@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../services/auth_service.dart';
@@ -17,11 +18,11 @@ final authStateChangesProvider = StreamProvider<AuthState>((ref) {
 final currentUserProvider = Provider<User?>((ref) {
   final authStateAsync = ref.watch(authStateChangesProvider);
   final sessionUser = authStateAsync.value?.session?.user;
-  if (sessionUser != null) return sessionUser;
-
-  // Fallback to currently cached user in the auth service
-  final service = ref.watch(authServiceProvider);
-  return service.currentUser;
+  final user = sessionUser ?? ref.watch(authServiceProvider).currentUser;
+  if (user != null) {
+    debugPrint('[SESSION UID]: ${user.id} (${user.email ?? 'No email'})');
+  }
+  return user;
 });
 
 /// State notifier allowing developers/users to bypass auth for UI development

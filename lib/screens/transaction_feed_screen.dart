@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -15,6 +16,7 @@ import '../widgets/slide_to_confirm.dart';
 import '../widgets/bank_sync_permission_sheet.dart';
 import '../widgets/setthi_ai_sheet.dart';
 import '../providers/chat_providers.dart';
+import '../widgets/profile_completion_dialog.dart';
 import 'setu_consent_webview.dart';
 
 /// Full DPC Redesign of the Setthi Transaction Feed & Telemetry Dashboard.
@@ -36,6 +38,7 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
   int _activeNavIndex =
       0; // 0: Dashboard (Screen A), 1: Telemetry (Screen B, kept for reference)
   int _telemetryFilterIndex = 0; // Kept for reference
+  bool _hasPromptedProfileCompletion = false;
 
   @override
   void initState() {
@@ -43,7 +46,58 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
     _scrollController.addListener(_onScroll);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ref.read(activeConsentIdProvider.notifier).refreshFromBackend();
+      final currentProfile = ref.read(userProfileProvider).value;
+      if (currentProfile != null) {
+        _checkAndPromptProfileCompletion(currentProfile);
+      }
     });
+  }
+
+  void _checkAndPromptProfileCompletion(Map<String, dynamic>? profile) {
+    if (_hasPromptedProfileCompletion || !mounted) return;
+
+    final user = ref.read(currentUserProvider);
+    if (user == null) return;
+
+    final rawName = profile?['full_name'] as String?;
+    final metaName = (user.userMetadata?['full_name'] as String? ??
+            user.userMetadata?['name'] as String?)
+        ?.trim();
+
+    final bool hasValidName = (rawName != null &&
+            rawName.trim().isNotEmpty &&
+            rawName.trim() != 'Setthi Member') ||
+        (metaName != null &&
+            metaName.trim().isNotEmpty &&
+            metaName.trim() != 'Setthi Member');
+
+    final bool hasDob = profile?['date_of_birth'] != null;
+    final bool hasGender = profile?['gender'] != null &&
+        (profile?['gender'] as String).trim().isNotEmpty;
+
+    // Pop dialog if user does not have a complete profile (all 3 fields are compulsory)
+    if (!hasValidName || !hasDob || !hasGender) {
+      _hasPromptedProfileCompletion = true;
+
+      DateTime? initialDob;
+      final rawDob = profile?['date_of_birth'] as String?;
+      if (rawDob != null) {
+        try {
+          initialDob = DateTime.parse(rawDob);
+        } catch (_) {}
+      }
+
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        ProfileCompletionDialog.show(
+          context,
+          initialName: hasValidName ? (rawName ?? metaName) : null,
+          initialDob: initialDob,
+          initialGender: profile?['gender'] as String?,
+          isMandatory: true,
+        );
+      });
+    }
   }
 
   @override
@@ -73,6 +127,12 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
 
   @override
   Widget build(BuildContext context) {
+    ref.listen<AsyncValue<Map<String, dynamic>?>>(userProfileProvider, (previous, next) {
+      next.whenData((profile) {
+        _checkAndPromptProfileCompletion(profile);
+      });
+    });
+
     final transactionFeedAsync = ref.watch(transactionFeedProvider);
     final hasActiveConsent = ref.watch(hasActiveConsentProvider);
     final isSyncing = transactionFeedAsync.isLoading;
@@ -94,7 +154,8 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
             isSyncing,
           ),
           loading: () {
-            if (transactionFeedAsync.hasValue) {
+            if (transactionFeedAsync.hasValue &&
+                transactionFeedAsync.value!.isNotEmpty) {
               return _buildBodyContent(
                 context,
                 ref,
@@ -103,9 +164,18 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
                 isSyncing,
               );
             }
+            if (hasActiveConsent) {
+              return const DpcSyncingWaitingView();
+            }
             return _buildSkeletonLoader();
           },
           error: (err, stack) {
+            if (_activeNavIndex == 1) {
+              return _buildProfileScreen(context, ref);
+            }
+            if (_activeNavIndex == 2) {
+              return _buildTelemetryScreen(context, ref, const []);
+            }
             if (transactionFeedAsync.hasValue &&
                 transactionFeedAsync.value!.isNotEmpty) {
               return _buildBodyContent(
@@ -123,6 +193,9 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
       bottomNavigationBar: DpcFloatingNavDock(
         activeIndex: _activeNavIndex,
         onHomeTap: () {
+          if (ref.read(transactionFeedProvider).hasError) {
+            ref.read(transactionFeedProvider.notifier).dismissErrorAndGoHome();
+          }
           if (_activeNavIndex != 0) {
             setState(() => _activeNavIndex = 0);
           } else if (_scrollController.hasClients) {
@@ -200,86 +273,37 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
       surfaceTintColor: Colors.transparent,
       titleSpacing: 18,
       title: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        mainAxisSize: MainAxisSize.min,
         children: [
-          // Left: Setthi Brand with app logo
-          Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              ClipRRect(
-                borderRadius: BorderRadius.circular(8),
-                child: Image.asset(
-                  'assets/app icon/Setthi.png',
-                  width: 28,
-                  height: 28,
-                  fit: BoxFit.contain,
-                  errorBuilder: (context, error, stackTrace) => Container(
-                    padding: const EdgeInsets.all(6),
-                    decoration: BoxDecoration(
-                      gradient: DpcColors.heroPastel1,
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: const Icon(
-                      Icons.bolt_rounded,
-                      color: DpcColors.textContrast,
-                      size: 16,
-                    ),
-                  ),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(8),
+            child: Image.asset(
+              'assets/app icon/Setthi.png',
+              width: 28,
+              height: 28,
+              fit: BoxFit.contain,
+              errorBuilder: (context, error, stackTrace) => Container(
+                padding: const EdgeInsets.all(6),
+                decoration: BoxDecoration(
+                  gradient: DpcColors.heroPastel1,
+                  borderRadius: BorderRadius.circular(10),
                 ),
-              ),
-              const SizedBox(width: 9),
-              const Text(
-                'Setthi',
-                style: TextStyle(
-                  color: DpcColors.textPrimary,
-                  fontSize: 20,
-                  fontWeight: FontWeight.w800,
-                  letterSpacing: -0.6,
+                child: const Icon(
+                  Icons.bolt_rounded,
+                  color: DpcColors.textContrast,
+                  size: 16,
                 ),
-              ),
-            ],
-          ),
-
-          // Right: Status connection badge
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-            decoration: BoxDecoration(
-              color: hasActiveConsent
-                  ? DpcColors.accentPositive.withValues(alpha: 0.12)
-                  : DpcColors.surfaceDark,
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(
-                color: hasActiveConsent
-                    ? DpcColors.accentPositive.withValues(alpha: 0.3)
-                    : DpcColors.surfaceBorder,
-                width: 1,
               ),
             ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Container(
-                  width: 6,
-                  height: 6,
-                  decoration: BoxDecoration(
-                    color: hasActiveConsent
-                        ? DpcColors.accentPositive
-                        : DpcColors.accentLevel,
-                    shape: BoxShape.circle,
-                  ),
-                ),
-                const SizedBox(width: 6),
-                Text(
-                  hasActiveConsent ? 'Bank Live' : 'Sandbox',
-                  style: TextStyle(
-                    color: hasActiveConsent
-                        ? DpcColors.accentPositive
-                        : DpcColors.textSecondary,
-                    fontSize: 11,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ],
+          ),
+          const SizedBox(width: 9),
+          const Text(
+            'Setthi',
+            style: TextStyle(
+              color: DpcColors.textPrimary,
+              fontSize: 20,
+              fontWeight: FontWeight.w800,
+              letterSpacing: -0.6,
             ),
           ),
         ],
@@ -1354,12 +1378,38 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
   // ==========================================
   Widget _buildProfileScreen(BuildContext context, WidgetRef ref) {
     final user = ref.watch(currentUserProvider);
-    final email = user?.email ?? 'Member';
-    final fullName = user?.userMetadata?['full_name'] as String? ?? 'Setthi Member';
+    final profileAsync = ref.watch(userProfileProvider);
+    final profile = profileAsync.value;
+
+    final profileName = (profile?['full_name'] as String?)?.trim();
+    final metaName = (user?.userMetadata?['full_name'] as String? ??
+            user?.userMetadata?['name'] as String?)
+        ?.trim();
+    final fullName = (profileName != null && profileName.isNotEmpty)
+        ? profileName
+        : ((metaName != null && metaName.isNotEmpty)
+            ? metaName
+            : 'Setthi Member');
+
+    final userEmail = user?.email?.trim();
+    final profileEmail = (profile?['email'] as String?)?.trim();
+    final isAppleUser = user?.appMetadata['provider'] == 'apple';
+    final email = (userEmail != null && userEmail.isNotEmpty)
+        ? userEmail
+        : ((profileEmail != null && profileEmail.isNotEmpty)
+            ? profileEmail
+            : (isAppleUser ? 'Apple ID Account' : 'Member'));
+
     final hasActiveConsent = ref.watch(hasActiveConsentProvider);
     final activeConsentId = ref.watch(activeConsentIdProvider);
     final balance = ref.watch(latestBalanceProvider);
     final aiCredits = ref.watch(aiCreditsProvider);
+
+    final avatarLetter = (fullName != 'Setthi Member' && fullName.isNotEmpty)
+        ? fullName[0].toUpperCase()
+        : (email.isNotEmpty && email != 'Member' && email != 'Apple ID Account'
+            ? email[0].toUpperCase()
+            : 'S');
 
     return SingleChildScrollView(
       physics: const BouncingScrollPhysics(),
@@ -1382,7 +1432,7 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
                   ),
                   child: Center(
                     child: Text(
-                      email.isNotEmpty ? email[0].toUpperCase() : 'S',
+                      avatarLetter,
                       style: const TextStyle(
                         color: DpcColors.textContrast,
                         fontSize: 24,
@@ -1396,14 +1446,38 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        fullName,
-                        style: const TextStyle(
-                          color: DpcColors.textPrimary,
-                          fontSize: 18,
-                          fontWeight: FontWeight.w800,
-                          letterSpacing: -0.4,
-                        ),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              fullName,
+                              style: const TextStyle(
+                                color: DpcColors.textPrimary,
+                                fontSize: 18,
+                                fontWeight: FontWeight.w800,
+                                letterSpacing: -0.4,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          GestureDetector(
+                            onTap: () => _showEditNameDialog(
+                              context,
+                              ref,
+                              fullName,
+                              profile: profile,
+                            ),
+                            child: const Padding(
+                              padding: EdgeInsets.only(left: 6, right: 2),
+                              child: Icon(
+                                Icons.edit_outlined,
+                                color: DpcColors.textSecondary,
+                                size: 16,
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
                       const SizedBox(height: 3),
                       Text(
@@ -1416,21 +1490,80 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
                         overflow: TextOverflow.ellipsis,
                       ),
                       const SizedBox(height: 6),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                        decoration: BoxDecoration(
-                          color: DpcColors.surfaceTrack,
-                          borderRadius: BorderRadius.circular(10),
-                          border: Border.all(color: DpcColors.surfaceBorder, width: 1),
-                        ),
-                        child: const Text(
-                          'Verified Member',
-                          style: TextStyle(
-                            color: DpcColors.accentPositive,
-                            fontSize: 10,
-                            fontWeight: FontWeight.w700,
+                      Wrap(
+                        spacing: 6,
+                        runSpacing: 4,
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 3,
+                            ),
+                            decoration: BoxDecoration(
+                              color: DpcColors.surfaceTrack,
+                              borderRadius: BorderRadius.circular(10),
+                              border: Border.all(
+                                color: DpcColors.surfaceBorder,
+                                width: 1,
+                              ),
+                            ),
+                            child: const Text(
+                              'Verified Member',
+                              style: TextStyle(
+                                color: DpcColors.accentPositive,
+                                fontSize: 10,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
                           ),
-                        ),
+                          if (profile?['age'] != null)
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 3,
+                              ),
+                              decoration: BoxDecoration(
+                                color: DpcColors.surfaceTrack,
+                                borderRadius: BorderRadius.circular(10),
+                                border: Border.all(
+                                  color: DpcColors.surfaceBorder,
+                                  width: 1,
+                                ),
+                              ),
+                              child: Text(
+                                'Age: ${profile!['age']}',
+                                style: const TextStyle(
+                                  color: DpcColors.textSecondary,
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                          if (profile?['gender'] != null &&
+                              (profile?['gender'] as String).isNotEmpty)
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 3,
+                              ),
+                              decoration: BoxDecoration(
+                                color: DpcColors.surfaceTrack,
+                                borderRadius: BorderRadius.circular(10),
+                                border: Border.all(
+                                  color: DpcColors.surfaceBorder,
+                                  width: 1,
+                                ),
+                              ),
+                              child: Text(
+                                '${profile?['gender']}',
+                                style: const TextStyle(
+                                  color: DpcColors.textSecondary,
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                        ],
                       ),
                     ],
                   ),
@@ -1747,6 +1880,30 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
     );
   }
 
+  /// Displays dialog allowing user to edit and save their profile (Name, Date of Birth, Gender)
+  Future<void> _showEditNameDialog(
+    BuildContext context,
+    WidgetRef ref,
+    String currentName, {
+    Map<String, dynamic>? profile,
+  }) async {
+    DateTime? initialDob;
+    final rawDob = profile?['date_of_birth'] as String?;
+    if (rawDob != null) {
+      try {
+        initialDob = DateTime.parse(rawDob);
+      } catch (_) {}
+    }
+
+    await ProfileCompletionDialog.show(
+      context,
+      initialName: currentName == 'Setthi Member' ? null : currentName,
+      initialDob: initialDob,
+      initialGender: profile?['gender'] as String?,
+      isMandatory: false,
+    );
+  }
+
   /// Displays the confirmation bottom sheet for irreversible account and data deletion
   void _showDeleteAccountConfirmationModal(BuildContext context, WidgetRef ref) {
     showModalBottomSheet(
@@ -1894,6 +2051,8 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
                             if (success && context.mounted) {
                               Navigator.of(modalContext).pop();
                               ref.read(authBypassProvider.notifier).reset();
+                              ref.invalidate(currentUserProvider);
+                              ref.invalidate(userProfileProvider);
                               ref.invalidate(transactionFeedProvider);
                               ref.invalidate(telemetryMetricsProvider);
                               ref.invalidate(hasActiveConsentProvider);
@@ -2365,6 +2524,10 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
     bool hasActiveConsent,
     bool isSyncing,
   ) {
+    if (isSyncing) {
+      return const DpcSyncingWaitingView();
+    }
+
     return Padding(
       padding: const EdgeInsets.all(24),
       child: Column(
@@ -2669,6 +2832,33 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
                   ),
                 ),
               ],
+              const SizedBox(height: 10),
+              SizedBox(
+                width: double.infinity,
+                height: 42,
+                child: TextButton.icon(
+                  key: const Key('error_state_go_home_button'),
+                  onPressed: () {
+                    setState(() => _activeNavIndex = 0);
+                    ref
+                        .read(transactionFeedProvider.notifier)
+                        .dismissErrorAndGoHome();
+                  },
+                  icon: const Icon(
+                    Icons.home_outlined,
+                    color: DpcColors.accentPositive,
+                    size: 18,
+                  ),
+                  label: const Text(
+                    'Go Back to Home',
+                    style: TextStyle(
+                      color: DpcColors.textPrimary,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ),
             ],
           ),
         ),
@@ -2687,8 +2877,15 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
         final activeConsent = await dbService.fetchActiveConsent();
         if (activeConsent != null && activeConsent['consent_id'] != null) {
           final cid = activeConsent['consent_id'] as String;
-          ref.read(activeConsentIdProvider.notifier).setConsentId(cid);
-          hasActiveConsent = true;
+          final aaService = ref.read(setuAaServiceProvider);
+          final status = await aaService.checkConsentStatus(cid);
+          if (status == 'ACTIVE') {
+            ref.read(activeConsentIdProvider.notifier).setConsentId(cid);
+            hasActiveConsent = true;
+          } else {
+            await dbService.updateConsentStatus(consentId: cid, status: status);
+            ref.read(activeConsentIdProvider.notifier).clear();
+          }
         }
       } catch (_) {}
     }
@@ -3016,17 +3213,73 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
       ),
     );
 
-    bool isApproved = approved == true;
-    if (!isApproved) {
+    // Verify backend status to ensure consent is genuinely ACTIVE before opening permission sheet
+    bool isApproved = false;
+    if (approved == true) {
       try {
         final status = await aaService.checkConsentStatus(consentId);
-        if (status == 'ACTIVE') {
-          isApproved = true;
+        isApproved = (status == 'ACTIVE');
+      } catch (_) {
+        await Future.delayed(const Duration(milliseconds: 800));
+        try {
+          final retryStatus = await aaService.checkConsentStatus(consentId);
+          isApproved = (retryStatus == 'ACTIVE');
+        } catch (_) {
+          isApproved = false;
         }
-      } catch (_) {}
+      }
+    } else {
+      try {
+        final status = await aaService.checkConsentStatus(consentId);
+        isApproved = (status == 'ACTIVE');
+      } catch (_) {
+        isApproved = false;
+      }
     }
 
-    if (isApproved && context.mounted) {
+    if (!isApproved) {
+      ref.read(pendingConsentIdProvider.notifier).clear();
+      try {
+        await ref
+            .read(supabaseDbServiceProvider)
+            .updateConsentStatus(consentId: consentId, status: 'CANCELLED');
+      } catch (_) {}
+
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            backgroundColor: DpcColors.surfaceDark,
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+              side: const BorderSide(color: DpcColors.surfaceBorder),
+            ),
+            content: const Row(
+              children: [
+                Icon(
+                  Icons.info_outline_rounded,
+                  color: DpcColors.textSecondary,
+                  size: 18,
+                ),
+                SizedBox(width: 8),
+                Text(
+                  'Bank connection was cancelled',
+                  style: TextStyle(
+                    color: DpcColors.textPrimary,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ],
+            ),
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+      return;
+    }
+
+    if (context.mounted) {
       ref.read(activeConsentIdProvider.notifier).setConsentId(consentId);
       ref.read(pendingConsentIdProvider.notifier).clear();
       try {
@@ -3946,6 +4199,210 @@ class _CategoryPickerSheetState extends State<_CategoryPickerSheet> {
                     ),
 
                     const SizedBox(height: 16),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Rich OLED Animated Bank Syncing & Decryption Waiting View
+class DpcSyncingWaitingView extends StatefulWidget {
+  const DpcSyncingWaitingView({super.key});
+
+  @override
+  State<DpcSyncingWaitingView> createState() => _DpcSyncingWaitingViewState();
+}
+
+class _DpcSyncingWaitingViewState extends State<DpcSyncingWaitingView>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _animController;
+  Timer? _stepTimer;
+  int _currentStepIndex = 0;
+
+  static const List<Map<String, String>> _steps = [
+    {
+      'title': 'Contacting Bank Gateway',
+      'subtitle': 'Connecting via RBI Regulated Account Aggregator...',
+    },
+    {
+      'title': 'Creating Encrypted Session',
+      'subtitle': 'Establishing 256-bit bank data pipeline...',
+    },
+    {
+      'title': 'Fetching & Decrypting Records',
+      'subtitle': 'Retrieving bank transactions & balance logs...',
+    },
+    {
+      'title': 'Organizing Intelligence Feed',
+      'subtitle': 'Categorizing merchants and computing cash flow...',
+    },
+  ];
+
+  @override
+  void initState() {
+    super.initState();
+    _animController = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 2),
+    )..repeat();
+
+    _stepTimer = Timer.periodic(const Duration(milliseconds: 2800), (timer) {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
+      if (_currentStepIndex < _steps.length - 1) {
+        setState(() {
+          _currentStepIndex++;
+        });
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _animController.dispose();
+    _stepTimer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final step = _steps[_currentStepIndex];
+
+    return Center(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 32),
+        child: Container(
+          padding: const EdgeInsets.all(26),
+          decoration: DpcDecorations.cardBase(radius: 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Pulsing / Spinning Animated Halo
+              Stack(
+                alignment: Alignment.center,
+                children: [
+                  AnimatedBuilder(
+                    animation: _animController,
+                    builder: (context, child) {
+                      return Container(
+                        width: 80,
+                        height: 80,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          border: Border.all(
+                            color: DpcColors.accentPositive.withValues(
+                              alpha: 0.15 + 0.25 * (1 - _animController.value),
+                            ),
+                            width: 1.5,
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                  Container(
+                    width: 60,
+                    height: 60,
+                    decoration: BoxDecoration(
+                      color: DpcColors.accentPositive.withValues(alpha: 0.12),
+                      shape: BoxShape.circle,
+                      border: Border.all(
+                        color: DpcColors.accentPositive.withValues(alpha: 0.4),
+                        width: 1.5,
+                      ),
+                    ),
+                    child: RotationTransition(
+                      turns: _animController,
+                      child: const Icon(
+                        Icons.sync_rounded,
+                        color: DpcColors.accentPositive,
+                        size: 30,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 22),
+
+              // Title
+              AnimatedSwitcher(
+                duration: const Duration(milliseconds: 350),
+                child: Text(
+                  step['title']!,
+                  key: ValueKey(step['title']),
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    color: DpcColors.textPrimary,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: -0.4,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 8),
+
+              // Subtitle
+              AnimatedSwitcher(
+                duration: const Duration(milliseconds: 350),
+                child: Text(
+                  step['subtitle']!,
+                  key: ValueKey(step['subtitle']),
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    color: DpcColors.textSecondary,
+                    fontSize: 13,
+                    height: 1.45,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 24),
+
+              // Indeterminate Smooth Linear Progress
+              ClipRRect(
+                borderRadius: BorderRadius.circular(6),
+                child: const LinearProgressIndicator(
+                  minHeight: 4,
+                  backgroundColor: DpcColors.surfaceTrack,
+                  valueColor: AlwaysStoppedAnimation<Color>(
+                    DpcColors.accentPositive,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 24),
+
+              // Security & Reassurance Tag
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                decoration: BoxDecoration(
+                  color: DpcColors.bgOled,
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: DpcColors.surfaceBorder),
+                ),
+                child: const Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      Icons.shield_outlined,
+                      color: DpcColors.accentPositive,
+                      size: 14,
+                    ),
+                    SizedBox(width: 8),
+                    Flexible(
+                      child: Text(
+                        'RBI Regulated AA • 256-Bit Encrypted Data',
+                        style: TextStyle(
+                          color: DpcColors.textSecondary,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
                   ],
                 ),
               ),

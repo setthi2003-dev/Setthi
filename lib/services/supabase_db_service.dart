@@ -45,6 +45,9 @@ class SupabaseDbService {
     String? fullName,
     String? phoneNumber,
     String? avatarUrl,
+    int? age,
+    String? gender,
+    DateTime? dateOfBirth,
   }) async {
     final client = _effectiveClient;
     if (client == null) return;
@@ -64,6 +67,25 @@ class SupabaseDbService {
       if (avatarUrl != null && avatarUrl.isNotEmpty) {
         payload['avatar_url'] = avatarUrl.trim();
       }
+      if (dateOfBirth != null) {
+        payload['date_of_birth'] =
+            '${dateOfBirth.year.toString().padLeft(4, '0')}-${dateOfBirth.month.toString().padLeft(2, '0')}-${dateOfBirth.day.toString().padLeft(2, '0')}';
+        if (age == null) {
+          final now = DateTime.now();
+          int calculatedAge = now.year - dateOfBirth.year;
+          if (now.month < dateOfBirth.month ||
+              (now.month == dateOfBirth.month && now.day < dateOfBirth.day)) {
+            calculatedAge--;
+          }
+          payload['age'] = calculatedAge;
+        }
+      }
+      if (age != null) {
+        payload['age'] = age;
+      }
+      if (gender != null && gender.isNotEmpty) {
+        payload['gender'] = gender.trim();
+      }
 
       await client.from('profiles').upsert(payload);
       debugPrint('[Supabase DB] Profile updated successfully for $userId');
@@ -79,11 +101,29 @@ class SupabaseDbService {
     if (client == null || uid == null) return null;
 
     try {
-      final res = await client
+      var res = await client
           .from('profiles')
           .select()
           .eq('id', uid)
           .maybeSingle();
+
+      if (res == null) {
+        // Self-heal: profile missing, create it automatically with 3 free credits
+        final user = client.auth.currentUser;
+        final email = user?.email ?? '';
+        final fullName = user?.userMetadata?['full_name'] as String? ??
+            user?.userMetadata?['name'] as String? ??
+            'Setthi Member';
+        await client.from('profiles').upsert({
+          'id': uid,
+          'email': email,
+          'full_name': fullName,
+          'ai_credits': 3,
+          'updated_at': DateTime.now().toUtc().toIso8601String(),
+        });
+        res = await client.from('profiles').select().eq('id', uid).maybeSingle();
+      }
+
       return res;
     } catch (e) {
       debugPrint('[Supabase DB] Error fetching profile: $e');
@@ -447,14 +487,42 @@ class SupabaseDbService {
     }
   }
 
+  Future<Map<String, dynamic>>? _inFlightSyncFuture;
+  String? _inFlightSyncConsentId;
+
   /// Triggers server-side Setu AA data session creation, polling, ReBIT parsing,
   /// and database upserts via the `sync-transactions` Supabase Edge Function.
+  /// Deduplicates concurrent sync requests to prevent Setu 410 "Consent use exceeded" race conditions.
   Future<Map<String, dynamic>> triggerBackendSync({String? consentId}) async {
     final client = _effectiveClient;
     if (client == null) {
       throw Exception('Supabase client is not configured or authenticated.');
     }
 
+    if (_inFlightSyncFuture != null && _inFlightSyncConsentId == consentId) {
+      debugPrint('[Supabase DB] Sync already in-flight for consent $consentId, awaiting active session...');
+      return _inFlightSyncFuture!;
+    }
+
+    final future = _executeBackendSync(client, consentId);
+    _inFlightSyncFuture = future;
+    _inFlightSyncConsentId = consentId;
+
+    try {
+      final res = await future;
+      return res;
+    } finally {
+      if (_inFlightSyncFuture == future) {
+        _inFlightSyncFuture = null;
+        _inFlightSyncConsentId = null;
+      }
+    }
+  }
+
+  Future<Map<String, dynamic>> _executeBackendSync(
+    SupabaseClient client,
+    String? consentId,
+  ) async {
     final response = await client.functions.invoke(
       'sync-transactions',
       body: consentId != null ? {'consentId': consentId} : <String, dynamic>{},

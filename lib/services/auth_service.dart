@@ -190,17 +190,39 @@ class AuthService {
     }
 
     // 4. Save initial name metadata if provided (Apple only returns this on first sign-in)
-    if (response.user != null &&
-        (credential.givenName != null || credential.familyName != null)) {
-      final fullName = [credential.givenName, credential.familyName]
-          .where((part) => part != null && part.isNotEmpty)
-          .join(' ')
-          .trim();
+    if (response.user != null) {
+      final user = response.user!;
+      String? fullName;
+      if (credential.givenName != null || credential.familyName != null) {
+        fullName = [credential.givenName, credential.familyName]
+            .where((part) => part != null && part.isNotEmpty)
+            .join(' ')
+            .trim();
 
-      if (fullName.isNotEmpty) {
-        await _effectiveClient.auth.updateUser(
-          UserAttributes(data: {'full_name': fullName}),
-        );
+        if (fullName.isNotEmpty) {
+          try {
+            await _effectiveClient.auth.updateUser(
+              UserAttributes(data: {'full_name': fullName}),
+            );
+          } catch (_) {}
+        }
+      }
+
+      // Ensure profile row exists in public.profiles
+      try {
+        final email = user.email ?? credential.email ?? '';
+        final resolvedName = (fullName != null && fullName.isNotEmpty)
+            ? fullName
+            : user.userMetadata?['full_name']?.toString();
+        await _effectiveClient.from('profiles').upsert({
+          'id': user.id,
+          'email': email,
+          if (resolvedName != null && resolvedName.isNotEmpty)
+            'full_name': resolvedName,
+          'updated_at': DateTime.now().toUtc().toIso8601String(),
+        });
+      } catch (e) {
+        debugPrint('[AppleSignIn] Profile upsert note: $e');
       }
     }
 
@@ -316,11 +338,17 @@ class AuthService {
 
     try {
       await _effectiveClient.rpc('delete_user_account');
-      await _effectiveClient.auth.signOut();
-      return true;
     } catch (e) {
-      debugPrint('[AuthService] Error deleting user account: $e');
+      debugPrint('[AuthService] Error executing delete_user_account RPC: $e');
       rethrow;
     }
+
+    try {
+      await _effectiveClient.auth.signOut();
+    } catch (e) {
+      debugPrint('[AuthService] Post-deletion sign-out warning: $e');
+    }
+
+    return true;
   }
 }

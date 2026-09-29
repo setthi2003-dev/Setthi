@@ -239,7 +239,7 @@ class _SetthiAiSheetState extends ConsumerState<SetthiAiSheet> {
                 ),
                 const SizedBox(height: 1),
                 const Text(
-                  'Deterministic Finance Companion',
+                  'Smart Finance Companion',
                   style: TextStyle(color: DpcColors.textMuted, fontSize: 11),
                 ),
               ],
@@ -485,7 +485,12 @@ class _SetthiAiSheetState extends ConsumerState<SetthiAiSheet> {
                   if (msg.isStreaming && displayContent.isEmpty && widgetData == null)
                     _buildThinkingIndicator()
                   else if (displayContent.isNotEmpty)
-                    _buildFormattedContent(displayContent, isUser),
+                    _buildFormattedContent(displayContent, isUser)
+                  else if (!msg.isStreaming && !isUser && widgetData == null)
+                    _buildFormattedContent(
+                      'I checked your account, but couldn\'t find any matching records for that request. Try asking about your overall balance or recent transfers!',
+                      isUser,
+                    ),
                   if (widgetData != null)
                     _buildGenerativeWidget(widgetData),
                 ],

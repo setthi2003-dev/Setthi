@@ -315,7 +315,7 @@ async function getSetuCredentialsFromVault(
   const clientSecret = secretMap.get("SETU_CLIENT_SECRET");
   const productInstanceId = secretMap.get("SETU_PRODUCT_INSTANCE_ID");
   const baseUrl = secretMap.get("SETU_BASE_URL") || "https://fiu-sandbox.setu.co";
-  const redirectUrl = secretMap.get("SETU_REDIRECT_URL") || "https://www.joinmandala.in/";
+  const redirectUrl = secretMap.get("SETU_REDIRECT_URL") || "https://setthi.in/";
 
   if (!clientId || !clientSecret || !productInstanceId) {
     throw new Error(

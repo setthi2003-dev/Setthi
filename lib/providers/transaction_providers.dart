@@ -64,19 +64,50 @@ class ActiveConsentIdNotifier extends Notifier<String?> {
     } catch (_) {}
   }
 
-  /// Discovers any active AA consent record in Supabase and syncs state
+  /// Discovers any active AA consent record in Supabase, validates with Setu, and syncs state
   Future<String?> refreshFromBackend() async {
     try {
-      final dbService = ref.read(supabaseDbServiceProvider);
       final user = ref.read(currentUserProvider);
+      if (user == null) {
+        return null;
+      }
+
+      final dbService = ref.read(supabaseDbServiceProvider);
       final activeConsent =
-          await dbService.fetchActiveConsent(userId: user?.id);
+          await dbService.fetchActiveConsent(userId: user.id);
+
       if (activeConsent != null && activeConsent['consent_id'] != null) {
         final cid = activeConsent['consent_id'] as String;
-        if (state != cid) {
-          setConsentId(cid);
+        final aaService = ref.read(setuAaServiceProvider);
+        try {
+          final status = await aaService.checkConsentStatus(cid);
+          if (status == 'ACTIVE') {
+            if (state != cid) {
+              setConsentId(cid);
+            }
+            return cid;
+          } else {
+            // Consent is not active on Setu (cancelled, pending, expired, revoked)
+            await dbService.updateConsentStatus(
+              consentId: cid,
+              status: status,
+            );
+            clear();
+            return null;
+          }
+        } catch (_) {
+          // If offline / network error checking Setu, retain if DB specifically had it ACTIVE
+          if (state != cid) {
+            setConsentId(cid);
+          }
+          return cid;
         }
-        return cid;
+      } else {
+        // No active consent found in Supabase for this authenticated user
+        if (state != null) {
+          clear();
+        }
+        return null;
       }
     } catch (_) {}
     return null;
@@ -208,31 +239,57 @@ class TransactionFeedNotifier extends AsyncNotifier<List<BankTransaction>> {
       try {
         final activeConsent = await dbService.fetchActiveConsent();
         if (activeConsent != null && activeConsent['consent_id'] != null) {
-          effectiveConsentId = activeConsent['consent_id'] as String;
-          final cid = effectiveConsentId;
-          Future.microtask(() {
-            ref.read(activeConsentIdProvider.notifier).setConsentId(cid);
-          });
+          final cid = activeConsent['consent_id'] as String;
+          final aaService = ref.read(setuAaServiceProvider);
+          try {
+            final status = await aaService.checkConsentStatus(cid);
+            if (status == 'ACTIVE') {
+              effectiveConsentId = cid;
+              Future.microtask(() {
+                ref.read(activeConsentIdProvider.notifier).setConsentId(cid);
+              });
+            } else {
+              effectiveConsentId = null;
+              await dbService.updateConsentStatus(
+                consentId: cid,
+                status: status,
+              );
+              ActiveConsentIdNotifier.deletePersistedConsent();
+              Future.microtask(() {
+                ref.read(activeConsentIdProvider.notifier).clear();
+              });
+            }
+          } catch (_) {
+            effectiveConsentId = cid;
+            Future.microtask(() {
+              ref.read(activeConsentIdProvider.notifier).setConsentId(cid);
+            });
+          }
         }
       } catch (_) {}
     } else {
-      // If a consentId was loaded from disk, check if it still exists in Supabase (in case user reset tables)
+      // If a consentId was loaded from disk, check if it still exists in Supabase (in case user reset tables or cancelled)
       try {
-        final activeConsent = await dbService.fetchActiveConsent();
-        if (activeConsent == null &&
-            SupabaseConfig.isConfigured &&
-            dbService.currentUserId != null) {
-          ActiveConsentIdNotifier.deletePersistedConsent();
-          Future.microtask(() {
-            ref.read(activeConsentIdProvider.notifier).clear();
-          });
-          return storedTxns;
+        if (SupabaseConfig.isConfigured && dbService.currentUserId != null) {
+          final activeConsent = await dbService.fetchActiveConsent();
+          if (activeConsent == null) {
+            effectiveConsentId = null;
+            ActiveConsentIdNotifier.deletePersistedConsent();
+            Future.microtask(() {
+              ref.read(activeConsentIdProvider.notifier).clear();
+            });
+            return storedTxns;
+          }
         }
       } catch (_) {}
     }
 
     // 4. If no stored transactions exist yet, but an active consent is present, trigger backend sync
-    if (storedTxns.isEmpty && effectiveConsentId != null && effectiveConsentId.isNotEmpty) {
+    if (storedTxns.isEmpty &&
+        effectiveConsentId != null &&
+        effectiveConsentId.isNotEmpty &&
+        SupabaseConfig.isConfigured &&
+        dbService.currentUserId != null) {
       try {
         await dbService.triggerBackendSync(consentId: effectiveConsentId);
         _totalCount = await dbService.countStoredTransactions();
@@ -370,6 +427,17 @@ class TransactionFeedNotifier extends AsyncNotifier<List<BankTransaction>> {
       try {
         await dbService.triggerBackendSync(consentId: consentId);
       } on SetuConsentExpiredException catch (_) {
+        // Check if transactions were stored before declaring session expired
+        final count = await dbService.countStoredTransactions();
+        if (count > 0) {
+          _totalCount = count;
+          final stored = await dbService.fetchStoredTransactions(
+            limit: defaultPageSize,
+            offset: 0,
+          );
+          if (stored.isNotEmpty) return stored;
+        }
+
         ActiveConsentIdNotifier.deletePersistedConsent();
         ref.read(activeConsentIdProvider.notifier).clear();
         if (consentId != null) {
@@ -390,6 +458,18 @@ class TransactionFeedNotifier extends AsyncNotifier<List<BankTransaction>> {
           final txns = await repository.fetchTransactions();
           return txns;
         }
+
+        // Check if transactions successfully reached Supabase before failing
+        final count = await dbService.countStoredTransactions();
+        if (count > 0) {
+          _totalCount = count;
+          final stored = await dbService.fetchStoredTransactions(
+            limit: defaultPageSize,
+            offset: 0,
+          );
+          if (stored.isNotEmpty) return stored;
+        }
+
         rethrow;
       }
 
@@ -422,6 +502,20 @@ class TransactionFeedNotifier extends AsyncNotifier<List<BankTransaction>> {
       return true;
     }
     return false;
+  }
+
+  /// Clears any error state and restores feed to local stored transactions or empty list
+  Future<void> dismissErrorAndGoHome() async {
+    final dbService = ref.read(supabaseDbServiceProvider);
+    try {
+      final stored = await dbService.fetchStoredTransactions(
+        limit: defaultPageSize,
+        offset: 0,
+      );
+      state = AsyncData(stored);
+    } catch (_) {
+      state = const AsyncData([]);
+    }
   }
 }
 

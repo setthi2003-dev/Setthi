@@ -28,6 +28,10 @@ void main() async {
   // Initialize Supabase if configured in secrets.json
   if (SupabaseConfig.isConfigured) {
     await SupabaseConfig.initialize();
+    try {
+      final session = SupabaseConfig.client.auth.currentSession;
+      debugPrint('[SESSION UID]: ${session?.user.id ?? 'No active session'}');
+    } catch (_) {}
   }
   SupabaseConfig.logStatus();
 
@@ -51,6 +55,8 @@ class SetthiApp extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final isPasswordRecovery = ref.watch(isPasswordRecoveryProvider);
     final isAuthenticated = ref.watch(isAuthenticatedProvider);
+    final user = ref.watch(currentUserProvider);
+    debugPrint('[SESSION UID]: ${user?.id ?? 'No active session'}');
 
     return MaterialApp(
       title: 'Setthi - Gen Z Finance',
@@ -78,8 +84,8 @@ class SetthiApp extends ConsumerWidget {
       home: isPasswordRecovery
           ? const ResetPasswordScreen()
           : (isAuthenticated
-              ? const TransactionFeedScreen()
-              : const AuthScreen()),
+                ? const TransactionFeedScreen()
+                : const AuthScreen()),
     );
   }
 }

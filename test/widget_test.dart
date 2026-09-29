@@ -26,6 +26,7 @@ import 'package:setthi/providers/chat_providers.dart';
 import 'package:setthi/services/chat_service.dart';
 import 'package:setthi/widgets/dpc_telemetry_cards.dart';
 import 'package:setthi/widgets/setthi_ai_sheet.dart';
+import 'package:setthi/widgets/profile_completion_dialog.dart';
 
 class _FakeChatService extends ChatService {
   final List<ChatStreamEvent> eventsToEmit;
@@ -1359,7 +1360,7 @@ void main() {
 
       // Header should display "Setthi AI" and "3 credits"
       expect(find.text('Setthi AI'), findsOneWidget);
-      expect(find.text('Deterministic Finance Companion'), findsOneWidget);
+      expect(find.text('Smart Finance Companion'), findsOneWidget);
       expect(find.text('3 credits'), findsOneWidget);
 
       // Empty state quick prompts should be visible
@@ -1911,6 +1912,145 @@ void main() {
       await tester.tap(find.text('Cancel, Keep My Account'));
       await tester.pumpAndSettle();
       expect(find.text('Delete Account & Data'), findsNothing);
+    });
+
+    testWidgets('ProfileCompletionDialog requires DOB, removes skip, and disables save button until all fields filled', (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: ProfileCompletionDialog(
+              initialName: '',
+              initialDob: DateTime(1996, 7, 15),
+              initialGender: null,
+              isMandatory: true,
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // Verify header and fields exist
+      expect(find.text('Complete Your Profile'), findsOneWidget);
+      expect(find.text('Full Name'), findsOneWidget);
+      expect(find.text('Date of Birth'), findsOneWidget);
+      expect(find.text('Gender'), findsOneWidget);
+
+      // Verify "Skip for now" is completely removed
+      expect(find.text('Skip for now'), findsNothing);
+
+      // Verify Save button is initially DISABLED because name and gender are missing
+      final saveFinder = find.byKey(const Key('save_profile_button'));
+      expect(saveFinder, findsOneWidget);
+      var saveButton = tester.widget<ElevatedButton>(saveFinder);
+      expect(saveButton.onPressed, isNull);
+
+      // Select gender chip
+      await tester.tap(find.byKey(const Key('gender_chip_Female')));
+      await tester.pumpAndSettle();
+
+      // Button is still disabled (Name missing)
+      saveButton = tester.widget<ElevatedButton>(saveFinder);
+      expect(saveButton.onPressed, isNull);
+
+      // Enter Full Name (now all 3 are filled and changed from initial empty)
+      await tester.enterText(find.byType(TextFormField).first, 'Maya Patel');
+      await tester.pumpAndSettle();
+
+      // Button should now be ENABLED
+      saveButton = tester.widget<ElevatedButton>(saveFinder);
+      expect(saveButton.onPressed, isNotNull);
+
+      // Clear the name to verify it disables again in real time
+      await tester.enterText(find.byType(TextFormField).first, '');
+      await tester.pumpAndSettle();
+
+      saveButton = tester.widget<ElevatedButton>(saveFinder);
+      expect(saveButton.onPressed, isNull);
+    });
+
+    testWidgets('ProfileCompletionDialog disables save button when editing existing profile until a field is edited', (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: ProfileCompletionDialog(
+              initialName: 'Maya Patel',
+              initialDob: DateTime(1996, 7, 15),
+              initialGender: 'Female',
+              isMandatory: false,
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final saveFinder = find.byKey(const Key('save_profile_button'));
+      expect(saveFinder, findsOneWidget);
+
+      // When opening with complete existing profile, button MUST BE DISABLED if nothing is edited
+      var saveButton = tester.widget<ElevatedButton>(saveFinder);
+      expect(saveButton.onPressed, isNull);
+
+      // Edit name: button should ENABLE
+      await tester.enterText(find.byType(TextFormField).first, 'Maya P');
+      await tester.pumpAndSettle();
+
+      saveButton = tester.widget<ElevatedButton>(saveFinder);
+      expect(saveButton.onPressed, isNotNull);
+
+      // Revert name back to original: button should DISABLE again
+      await tester.enterText(find.byType(TextFormField).first, 'Maya Patel');
+      await tester.pumpAndSettle();
+
+      saveButton = tester.widget<ElevatedButton>(saveFinder);
+      expect(saveButton.onPressed, isNull);
+
+      // Change gender: button should ENABLE
+      await tester.tap(find.byKey(const Key('gender_chip_Non-Binary')));
+      await tester.pumpAndSettle();
+
+      saveButton = tester.widget<ElevatedButton>(saveFinder);
+      expect(saveButton.onPressed, isNotNull);
+
+      // Revert gender back to original Female: button should DISABLE
+      await tester.tap(find.byKey(const Key('gender_chip_Female')));
+      await tester.pumpAndSettle();
+
+      saveButton = tester.widget<ElevatedButton>(saveFinder);
+      expect(saveButton.onPressed, isNull);
+    });
+
+    test('Bank consent cancellation prevents false positive approval and clears pending state', () async {
+      // Setup mock AA service returning PENDING (user aborted/cancelled before OTP)
+      final mockClient = MockClient((request) async {
+        if (request.url.path.contains('/v2/consents/pending-consent-123')) {
+          return http.Response(
+            jsonEncode({'id': 'pending-consent-123', 'status': 'PENDING'}),
+            200,
+            headers: {'content-type': 'application/json'},
+          );
+        }
+        return http.Response('{"error": "not found"}', 404);
+      });
+
+      final aaService = SetuAaService(client: mockClient);
+      final container = ProviderContainer(
+        overrides: [
+          setuAaServiceProvider.overrideWithValue(aaService),
+        ],
+      );
+
+      container.read(pendingConsentIdProvider.notifier).set('pending-consent-123');
+      expect(container.read(pendingConsentIdProvider), equals('pending-consent-123'));
+      expect(container.read(activeConsentIdProvider), isNull);
+
+      // Verify status check returns PENDING, so checkAndSyncConsent returns false
+      final synced = await container
+          .read(transactionFeedProvider.notifier)
+          .checkAndSyncConsent('pending-consent-123');
+
+      expect(synced, isFalse);
+      // Active consent must NEVER be set for a cancelled/pending flow
+      expect(container.read(activeConsentIdProvider), isNull);
     });
   });
 }
