@@ -28,9 +28,9 @@ class DpcColors {
     end: Alignment.bottomRight,
   );
 
-  // Hero Pastel 2 (Lilac/Purple) - Secondary mode / AI / Insights
+  // Hero Pastel 2 (Titanium / Slate) - Secondary mode / AI / Insights
   static const LinearGradient heroPastel2 = LinearGradient(
-    colors: [Color(0xFFE0C3FC), Color(0xFF8EC5FC)],
+    colors: [Color(0xFFE2E8F0), Color(0xFF94A3B8)],
     begin: Alignment.topLeft,
     end: Alignment.bottomRight,
   );
@@ -58,11 +58,11 @@ class DpcColors {
   static const Color textContrast = Color(0xFF121214);
   static const Color textContrastSecondary = Color(0xFF3A3A3C);
 
-  // Semantic Accents
-  static const Color accentPositive = Color(0xFF34D399); // Positive metric / Inflow / Success
-  static const Color accentNegative = Color(0xFFF43F5E); // Loss / Deficit / Alert
-  static const Color accentPrimary = Color(0xFF38BDF8);  // Currency / Balances / Chips
-  static const Color accentLevel = Color(0xFFF59E0B);    // Radial progress / Trophy / Badges
+  // Semantic Accents (Refined, non-glare architectural hues)
+  static const Color accentPositive = Color(0xFF4ADE80); // Positive metric / Inflow / Success
+  static const Color accentNegative = Color(0xFFE05A6D); // Loss / Deficit / Alert
+  static const Color accentPrimary = Color(0xFF7DD3FC);  // Currency / Balances / Chips
+  static const Color accentLevel = Color(0xFFEAB308);    // Radial progress / Trophy / Badges
 }
 
 class DpcTypography {

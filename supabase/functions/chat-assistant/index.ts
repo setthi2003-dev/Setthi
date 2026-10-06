@@ -55,7 +55,7 @@ const geminiTools = [
       {
         name: "list_recent_transactions",
         description:
-          "Lists up to 5 most recent transactions with merchant name, amount, date, and flow type (DEBIT/CREDIT). Call this when the user asks to see recent purchases, latest activity, or transactions.",
+          "Lists up to 5 most recent transactions. Each transaction record includes merchant name, amount, type (DEBIT/CREDIT), category, transaction_timestamp (the actual time the transaction occurred), created_at (the time the record was provided/ingested into the system), and mode. Call this when the user asks to see recent purchases, latest activity, or transactions.",
         parameters: {
           type: "OBJECT",
           properties: {
@@ -69,6 +69,15 @@ const geminiTools = [
               description: "Optional filter: 'DEBIT' for spending/outflows, 'CREDIT' for income/inflows",
             },
           },
+        },
+      },
+      {
+        name: "get_cashflow_rhythm",
+        description:
+          "Calculates real-time cashflow rhythm, dynamic safe-to-spend today and this week, upcoming committed bills, and remaining runway in days calibrated with the user's income rhythm (Salaried, Freelancer, Allowance). Call this when the user asks about safe to spend today or this week, upcoming bills, or cashflow rhythm.",
+        parameters: {
+          type: "OBJECT",
+          properties: {},
         },
       },
       {
@@ -232,9 +241,12 @@ Deno.serve(async (req: Request) => {
     let latestTxnDateStr = "";
     let sevenDaysPriorStr = "";
     let latestTxnFormatted = "";
+    let latestTxnIso = "";
+    let latestCreatedAtIso = "";
+    let daysSinceLatestTxn: number | null = null;
 
     try {
-      const [snapRes, safeRes, latestTxnRes] = await Promise.all([
+      const [snapRes, safeRes, latestTxnRes, latestIngestedRes] = await Promise.all([
         supabase
           .from("user_financial_snapshot")
           .select("*")
@@ -243,9 +255,16 @@ Deno.serve(async (req: Request) => {
         supabase.rpc("get_safe_to_spend", { p_user_id: user.id }),
         supabase
           .from("bank_transactions")
-          .select("transaction_timestamp")
+          .select("transaction_timestamp, created_at")
           .eq("user_id", user.id)
           .order("transaction_timestamp", { ascending: false })
+          .limit(1)
+          .maybeSingle(),
+        supabase
+          .from("bank_transactions")
+          .select("created_at")
+          .eq("user_id", user.id)
+          .order("created_at", { ascending: false })
           .limit(1)
           .maybeSingle(),
       ]);
@@ -253,16 +272,26 @@ Deno.serve(async (req: Request) => {
       const snap = snapRes.data;
       const safe = safeRes.data;
       const latestTxn = latestTxnRes.data;
+      const latestIngested = latestIngestedRes.data;
 
       if (latestTxn?.transaction_timestamp) {
         const d = new Date(latestTxn.transaction_timestamp);
-        latestTxnDateStr = d.toISOString().split("T")[0];
+        latestTxnIso = d.toISOString();
+        latestTxnDateStr = latestTxnIso.split("T")[0];
         sevenDaysPriorStr = new Date(d.getTime() - 7 * 86400000).toISOString().split("T")[0];
         latestTxnFormatted = d.toLocaleDateString("en-IN", {
           day: "2-digit",
           month: "short",
           year: "numeric",
         });
+        const nowMs = Date.now();
+        daysSinceLatestTxn = Math.max(0, Math.floor((nowMs - d.getTime()) / (1000 * 60 * 60 * 24)));
+      }
+
+      if (latestIngested?.created_at) {
+        latestCreatedAtIso = new Date(latestIngested.created_at).toISOString();
+      } else if (latestTxn?.created_at) {
+        latestCreatedAtIso = new Date(latestTxn.created_at).toISOString();
       }
 
       if (snap) {
@@ -274,9 +303,17 @@ Deno.serve(async (req: Request) => {
         const safeSpend = safe?.safe_to_spend_daily != null
           ? Number(safe.safe_to_spend_daily).toLocaleString("en-IN")
           : "N/A";
-        const periodLabel = snap.is_live_data ? "Past 7 Days" : (snap.statement_period_label ?? `Up to ${latestTxnFormatted}`);
+        let periodLabel = snap.is_live_data ? "Past 7 Days" : (snap.statement_period_label ?? `Up to ${latestTxnFormatted}`);
+        if (periodLabel === "No data" || !periodLabel) {
+          periodLabel = "No recent records";
+        }
 
-        snapshotText = `Current Balance: ₹${bal}, Active Window: ${periodLabel} (${snap.is_live_data ? "LIVE" : "HISTORICAL STATEMENT"}), 7-day spend: ₹${spent}, 7-day inflow: ₹${inflow} (Top: ${topCat}), Impulse Ratio: ${ratio}%, Daily Safe Spend: ₹${safeSpend}.`;
+        const feedType = snap.is_live_data ? "LIVE FEED" : "HISTORICAL STATEMENT";
+        const recencyInfo = daysSinceLatestTxn !== null
+          ? (daysSinceLatestTxn <= 5 ? `Occurred ${daysSinceLatestTxn} days ago (within past 5 days)` : `Occurred ${daysSinceLatestTxn} days ago (older than 5 days)`)
+          : "No prior records";
+
+        snapshotText = `Current Balance: ₹${bal}, Active Window: ${periodLabel} (${feedType}), Latest Transaction Timestamp: ${latestTxnIso || latestTxnDateStr} (${latestTxnFormatted}, ${recencyInfo}), Records Provided At (created_at): ${latestCreatedAtIso || "None"}, 7-day spend: ₹${spent}, 7-day inflow: ₹${inflow} (Top: ${topCat}), Impulse Ratio: ${ratio}%, Daily Safe Spend: ₹${safeSpend}.`;
       }
     } catch (err) {
       console.warn("[chat-assistant] Failed to fetch financial snapshot:", err);
@@ -292,29 +329,50 @@ Deno.serve(async (req: Request) => {
       parts: [
         {
           text: `You are Setthi AI, a witty, empathetic, candid Gen Z personal finance companion (inspired by Cleo).
-You talk like a savvy, candid best friend who helps the user understand their money with light humor, emojis, and real talk.
+You talk like a savvy, candid financial advisor and companion who helps the user understand their money with light humor and sharp, insightful real talk.
 Always format currency in Indian Rupee format (₹X,XXX).
 Current Clock Time in India (IST): ${istTime} (ISO: ${nowIso}).
+
+CRITICAL FORMATTING & EMOJI RULE (ZERO TOLERANCE):
+NEVER use any emoji, emoticon, smiley, or unicode emotion symbol under any circumstance in your response.
+Your responses must be 100% free of emojis (no emojis at all).
+Do NOT include pizza, rockets, sparkles, shopping bags, medals, nail polish, or any pictograms.
 
 USER FINANCIAL SNAPSHOT (0ms Instant Memory):
 ${snapshotText}
 
-TEMPORAL CONTEXT & ANTI-HALLUCINATION RULES (CRITICAL):
-1. Statement vs Live Data:
-   ${latestTxnDateStr ? `- The user's account contains data from an imported STATEMENT where the latest transaction date is ${latestTxnFormatted} (${latestTxnDateStr}).
+CRITICAL LANGUAGE RULE (ZERO TOLERANCE):
+NEVER use the word "data" under any circumstance in your thoughts, reasoning, or response.
+Do NOT say "I have the data", "we store your data", "based on your data", "according to the data", "in your data", or any phrase containing the word "data".
+Instead, refer naturally to "records", "transactions", "statement", "ledger", "account history", "activity", or "finances".
+
+TIMESTAMP MEANINGS & TEMPORAL DISCRIMINATION (CRITICAL):
+1. "transaction_timestamp": The actual time when the financial transaction took place at the merchant or bank.
+2. "created_at": The time when the transaction was given, imported, or synced into Setthi.
+3. DISTINGUISHING RECENT VS PAST TRANSACTIONS (e.g. PAST FIVE DAYS):
+   - ALWAYS use "transaction_timestamp" (when the transaction happened) to evaluate recency and relative time queries.
+   - NEVER use "created_at" to judge when money was spent or received. For example, if a statement was imported today ("created_at" is today), but the transactions in it took place 20 days ago ("transaction_timestamp"), those transactions happened in the past, NOT today or recently!
+   - When the user asks about recent transactions or activity in the "past five days":
+     * Check "transaction_timestamp" against the current clock time (${istTime}).
+     * Only transactions whose "transaction_timestamp" occurred within the past 5 days qualify as recent / past five days.
+     * If the user's latest "transaction_timestamp" occurred more than 5 days ago (e.g. ${daysSinceLatestTxn !== null ? `${daysSinceLatestTxn} days ago` : "in an earlier period"}), inform the user with clarity that there have been no transactions in the past five days, and mention when their latest transaction actually took place (e.g., "You don't have any transactions in the past five days. Your last recorded transaction was on ${latestTxnFormatted}").
+
+TEMPORAL CONTEXT & ANTI-HALLUCINATION RULES:
+1. Statement vs Live Feed:
+   ${latestTxnDateStr ? `- The user's account contains records from an imported STATEMENT where the latest transaction date is ${latestTxnFormatted} (${latestTxnDateStr}).
    - When the user asks relative time queries like "this week", "lately", "recently", "past 7 days", or "this month":
      * NEVER evaluate against the real-world current year (${currentYear}).
      * Anchor your query and explanation to the STATEMENT PERIOD (ending on ${latestTxnFormatted}).
      * When invoking tools like \`get_spending_summary\` with date filters for relative time ("this week", "recently"), use start_date: "${sevenDaysPriorStr}" and end_date: "${latestTxnDateStr}", NOT current calendar dates!
-     * In your answer, ALWAYS explicitly clarify the timeframe to the user (e.g., "Looking at your statement for ${snapshotText.includes('Active Window:') ? snapshotText.split('Active Window: ')[1].split(' (')[0] : latestTxnFormatted}...").
+     * In your answer, ALWAYS explicitly clarify the timeframe to the user (e.g., "Looking at your statement for ${snapshotText.includes("Active Window:") ? snapshotText.split("Active Window: ")[1].split(" (")[0] : latestTxnFormatted}...").
      * NEVER tell the user that historical transactions or inflows from ${latestTxnDateStr.slice(0, 4)} occurred "this week" or "today" in real life.` : `- The user's account is live. Answer relative queries against current dates.`}
 2. Grounded Figures: NEVER guess, estimate, or hallucinate financial amounts not in the snapshot or tool outputs.
 
-HANDLING NON-EXISTENT DATA & ZERO RESULTS (CRITICAL):
+HANDLING EMPTY RESULTS & ZERO MATCHES:
 1. If a tool returns 0 records, 0 spend, or empty lists (e.g. user asks for "top 3 food orders", "Swiggy", or a merchant/category with no matching records):
    - You MUST respond with a clear, helpful, transparent assistant message.
    - NEVER return an empty message, never give a blank bubble, and never fail silently.
-   - Candidly explain that no transactions matching that category or merchant were found in their statement/history.
+   - Candidly explain that no transactions matching that category or merchant were found in their statement or account history.
    - Mention what types of transactions ARE found in their statement (e.g., peer-to-peer transfers, travel, or general debits) so the user gets complete clarity.
 
 TOOL USAGE PROTOCOL:
@@ -327,13 +385,12 @@ TOOL USAGE PROTOCOL:
 7. Keep your final answers punchy, helpful, formatted with clean bullets if listing items, and never more than 2-3 short paragraphs.
 
 GENERATIVE UI PROTOCOL:
-When summarizing cash flow, budgets, safe-to-spend, or category breakdowns, output a hidden UI widget tag at the very end of your message in this format:
-<!--WIDGET:{"type":"split_card","title":"CASH FLOW","gaugeProgress":0.65,"gaugeLabel":"Retention","keyValues":[{"label":"Inflow","value":"₹12,000"},{"label":"Outflow","value":"₹6,400"}]}-->
+When summarizing spending channels, budgets, or health scores, you may optionally output a hidden UI widget tag at the very end of your message in this format:
+<!--WIDGET:{"type":"segmented_bar","title":"SPEND BREAKDOWN","segments":[{"label":"UPI","value":82,"color":"#97C5B8"},{"label":"Cards","value":18,"color":"#D1BA8E"}]}-->
 Available types:
-1. split_card: {"type":"split_card","title":"CASH FLOW","gaugeProgress":0.65,"gaugeLabel":"Retention","keyValues":[{"label":"Inflow","value":"₹12,000"},{"label":"Outflow","value":"₹6,400"}]}
-2. segmented_bar: {"type":"segmented_bar","title":"SPEND BREAKDOWN","segments":[{"label":"UPI","value":82,"color":"#97C5B8"},{"label":"Cards","value":18,"color":"#D1BA8E"}]}
-3. radial_gauge: {"type":"radial_gauge","title":"FINANCIAL HEALTH","value":85,"max":100,"subtitle":"Healthy"}
-Use it only when visual summary aids understanding. Ensure valid JSON inside the tag and place it at the very end of your final response without extra trailing characters.`,
+1. segmented_bar: {"type":"segmented_bar","title":"SPEND BREAKDOWN","segments":[{"label":"UPI","value":82,"color":"#97C5B8"},{"label":"Cards","value":18,"color":"#D1BA8E"}]}
+2. radial_gauge: {"type":"radial_gauge","title":"FINANCIAL HEALTH","value":85,"max":100,"subtitle":"Healthy"}
+CRITICAL: NEVER output split_card widgets. Only use segmented_bar or radial_gauge when visual summary aids understanding. Ensure valid JSON inside the tag and place it at the very end of your final response without extra trailing characters.`,
         },
       ],
     };
@@ -387,7 +444,10 @@ Use it only when visual summary aids understanding. Ensure valid JSON inside the
           },
           generationConfig: {
             temperature: 0.7,
-            maxOutputTokens: 800,
+            maxOutputTokens: 2048,
+            thinkingConfig: {
+              thinkingBudget: 0,
+            },
           },
         }),
       });
@@ -445,9 +505,41 @@ Use it only when visual summary aids understanding. Ensure valid JSON inside the
             });
             toolResult = error ? { error: error.message } : data;
           } else if (fnName === "list_recent_transactions") {
-            const { data, error } = await supabase.rpc("list_recent_transactions", {
-              p_limit: fnArgs.limit ? Number(fnArgs.limit) : 5,
-              p_flow_type: fnArgs.flow_type ? String(fnArgs.flow_type) : null,
+            const limit = fnArgs.limit ? Number(fnArgs.limit) : 5;
+            let query = supabase
+              .from("bank_transactions")
+              .select("clean_merchant_name, amount, type, category, transaction_timestamp, created_at, mode")
+              .eq("user_id", user.id)
+              .order("transaction_timestamp", { ascending: false })
+              .order("created_at", { ascending: false })
+              .limit(limit);
+
+            if (fnArgs.flow_type) {
+              query = query.eq("type", String(fnArgs.flow_type).toUpperCase());
+            }
+
+            const { data, error } = await query;
+            if (error || !data) {
+              const { data: rpcData, error: rpcErr } = await supabase.rpc("list_recent_transactions", {
+                p_limit: limit,
+                p_flow_type: fnArgs.flow_type ? String(fnArgs.flow_type) : null,
+                p_user_id: user.id,
+              });
+              toolResult = rpcErr ? { error: rpcErr.message } : rpcData;
+            } else {
+              toolResult = data.map((t) => ({
+                merchant: t.clean_merchant_name,
+                amount: t.amount,
+                type: t.type,
+                category: t.category ?? "Uncategorized",
+                transaction_timestamp: t.transaction_timestamp,
+                created_at: t.created_at,
+                date: t.transaction_timestamp ? String(t.transaction_timestamp).replace("T", " ").slice(0, 16) : null,
+                mode: t.mode,
+              }));
+            }
+          } else if (fnName === "get_cashflow_rhythm") {
+            const { data, error } = await supabase.rpc("get_cashflow_rhythm", {
               p_user_id: user.id,
             });
             toolResult = error ? { error: error.message } : data;
@@ -517,7 +609,10 @@ Use it only when visual summary aids understanding. Ensure valid JSON inside the
       },
       generationConfig: {
         temperature: 0.7,
-        maxOutputTokens: 800,
+        maxOutputTokens: 2048,
+        thinkingConfig: {
+          thinkingBudget: 0,
+        },
       },
     };
 
@@ -561,6 +656,45 @@ Use it only when visual summary aids understanding. Ensure valid JSON inside the
         let buffer = "";
 
         try {
+          const emojiRegex =
+            /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE00}-\u{FE0F}\u{1F900}-\u{1F9FF}\u{1F600}-\u{1F64F}\u{1F680}-\u{1F6FF}\u{200D}\u{2300}-\u{23FF}\u{2B50}]/gu;
+
+          const sanitizeText = (txt: string): string => {
+            const noData = txt.replace(/\bdata\b/gi, (match) => {
+              if (match === "DATA") return "RECORDS";
+              if (match === "Data") return "Records";
+              return "records";
+            });
+            return noData.replace(emojiRegex, "");
+          };
+
+          const processJsonChunk = (jsonStr: string) => {
+            if (jsonStr === "[DONE]") return;
+            try {
+              const parsed = JSON.parse(jsonStr);
+              const candidate = parsed.candidates?.[0];
+              if (candidate?.finishReason && candidate.finishReason !== "STOP") {
+                console.log(`[chat-assistant] Stream candidate finishReason: ${candidate.finishReason}`);
+              }
+              const parts = candidate?.content?.parts ?? [];
+              for (const part of parts) {
+                if (part.text) {
+                  const cleanChunk = sanitizeText(part.text);
+                  if (cleanChunk.length > 0) {
+                    accumulatedText += cleanChunk;
+                    controller.enqueue(
+                      encoder.encode(
+                        `data: ${JSON.stringify({ text: cleanChunk, done: false })}\n\n`
+                      )
+                    );
+                  }
+                }
+              }
+            } catch (_) {
+              // Non-JSON line or keep-alive
+            }
+          };
+
           while (true) {
             const { done, value } = await reader.read();
             if (done) break;
@@ -572,29 +706,14 @@ Use it only when visual summary aids understanding. Ensure valid JSON inside the
             for (const line of lines) {
               const trimmed = line.trim();
               if (trimmed.startsWith("data: ")) {
-                const jsonStr = trimmed.substring(6).trim();
-                if (jsonStr === "[DONE]") continue;
-
-                try {
-                  const parsed = JSON.parse(jsonStr);
-                  const candidate = parsed.candidates?.[0];
-                  const parts = candidate?.content?.parts ?? [];
-
-                  for (const part of parts) {
-                    if (part.text) {
-                      accumulatedText += part.text;
-                      controller.enqueue(
-                        encoder.encode(
-                          `data: ${JSON.stringify({ text: part.text, done: false })}\n\n`
-                        )
-                      );
-                    }
-                  }
-                } catch (_) {
-                  // Non-JSON line or keep-alive
-                }
+                processJsonChunk(trimmed.substring(6).trim());
               }
             }
+          }
+
+          // Flush any trailing line in buffer
+          if (buffer.trim().startsWith("data: ")) {
+            processJsonChunk(buffer.trim().substring(6).trim());
           }
 
           // Fallback: Ensure the user NEVER receives an empty bubble or empty result
@@ -648,7 +767,7 @@ Use it only when visual summary aids understanding. Ensure valid JSON inside the
             await supabase.from("chat_messages").insert({
               user_id: user.id,
               role: "assistant",
-              content: accumulatedText.trim(),
+              content: sanitizeText(accumulatedText.trim()),
               metadata: assistantMetadata,
             });
           }

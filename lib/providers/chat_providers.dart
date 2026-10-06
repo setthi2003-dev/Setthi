@@ -182,8 +182,16 @@ class ChatMessagesNotifier extends AsyncNotifier<List<ChatMessage>> {
     state = AsyncData(updatedList);
   }
 
-  void clearHistory() {
+  /// Clears the chat conversation locally and removes all chat message records from the backend
+  Future<bool> clearHistory() async {
     state = const AsyncData([]);
+
+    try {
+      final dbService = ref.read(supabaseDbServiceProvider);
+      return await dbService.deleteChatHistory();
+    } catch (_) {
+      return false;
+    }
   }
 }
 

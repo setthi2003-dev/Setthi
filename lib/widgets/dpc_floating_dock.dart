@@ -1,35 +1,43 @@
 import 'package:flutter/material.dart';
 import '../config/dpc_tokens.dart';
+import 'ai_companion_rive_widget.dart';
 
 /// Floating Bottom Navigation Dock
 /// Elevated dark island dock providing quick actions (Home, AI, Sync, Bank, Profile).
 /// Clean, icon-only layout preventing any RenderFlex overflows on all device sizes.
 class DpcFloatingNavDock extends StatelessWidget {
   final int activeIndex;
+  final VoidCallback? onAiTap;
+  final VoidCallback? onTelemetryTap;
   final VoidCallback onHomeTap;
-  final VoidCallback onSyncTap;
   final VoidCallback onBankTap;
-  final VoidCallback? onAiChatTap;
   final VoidCallback? onProfileTap;
+  final VoidCallback? onSyncTap;
+  final VoidCallback? onAiChatTap;
   final bool isSyncing;
   final bool hasActiveConsent;
 
   const DpcFloatingNavDock({
     super.key,
-    this.activeIndex = 0,
+    this.activeIndex = 2,
+    this.onAiTap,
+    this.onTelemetryTap,
     required this.onHomeTap,
-    required this.onSyncTap,
     required this.onBankTap,
-    this.onAiChatTap,
     this.onProfileTap,
+    this.onSyncTap,
+    this.onAiChatTap,
     this.isSyncing = false,
     this.hasActiveConsent = false,
   });
 
   @override
   Widget build(BuildContext context) {
-    final isHomeActive = activeIndex == 0;
-    final isProfileActive = activeIndex == 1;
+    final isAiActive = activeIndex == 0;
+    final isTelemetryActive = activeIndex == 1;
+    final isHomeActive = activeIndex == 2;
+    final isBankActive = activeIndex == 3;
+    final isProfileActive = activeIndex == 4;
 
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
@@ -38,9 +46,68 @@ class DpcFloatingNavDock extends StatelessWidget {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceAround,
         children: [
-          // 1. Home Button (replaces Feed)
+          // 1. Setthi AI Page (replaces Home icon in slot 1)
           Tooltip(
-            message: 'Home',
+            message: 'Setthi AI',
+            child: InkWell(
+              onTap: onAiTap ?? onAiChatTap,
+              borderRadius: BorderRadius.circular(16),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 200),
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: isAiActive ? DpcColors.surfaceElevated : Colors.transparent,
+                  borderRadius: BorderRadius.circular(16),
+                  border: isAiActive
+                      ? Border.all(
+                          color: DpcColors.surfaceBorder,
+                          width: 1,
+                        )
+                      : null,
+                ),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: const AiCompanionRiveWidget(
+                    size: 24,
+                  ),
+                ),
+              ),
+            ),
+          ),
+
+          // 2. Telemetry & Analytics Page
+          Tooltip(
+            message: 'Telemetry & Analytics',
+            child: InkWell(
+              onTap: onTelemetryTap,
+              borderRadius: BorderRadius.circular(16),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 200),
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: isTelemetryActive ? DpcColors.surfaceElevated : Colors.transparent,
+                  borderRadius: BorderRadius.circular(16),
+                  border: isTelemetryActive
+                      ? Border.all(
+                          color: DpcColors.surfaceBorder,
+                          width: 1,
+                        )
+                      : null,
+                ),
+                child: Icon(
+                  Icons.insights_rounded,
+                  size: 20,
+                  color: isTelemetryActive
+                      ? DpcColors.textPrimary
+                      : DpcColors.textSecondary,
+                ),
+              ),
+            ),
+          ),
+
+          // 3. Present Homepage with Total Balance
+          Tooltip(
+            message: 'Home & Balance',
             child: InkWell(
               onTap: onHomeTap,
               borderRadius: BorderRadius.circular(16),
@@ -48,7 +115,7 @@ class DpcFloatingNavDock extends StatelessWidget {
                 duration: const Duration(milliseconds: 200),
                 padding: const EdgeInsets.all(10),
                 decoration: BoxDecoration(
-                  color: isHomeActive ? DpcColors.surfaceTrack : Colors.transparent,
+                  color: isHomeActive ? DpcColors.surfaceElevated : Colors.transparent,
                   borderRadius: BorderRadius.circular(16),
                   border: isHomeActive
                       ? Border.all(
@@ -61,72 +128,14 @@ class DpcFloatingNavDock extends StatelessWidget {
                   Icons.home_rounded,
                   size: 20,
                   color: isHomeActive
-                      ? DpcColors.accentPositive
+                      ? DpcColors.textPrimary
                       : DpcColors.textSecondary,
                 ),
               ),
             ),
           ),
 
-          // 2. Setthi AI Trigger
-          if (onAiChatTap != null)
-            Tooltip(
-              message: 'Setthi AI',
-              child: InkWell(
-                onTap: onAiChatTap,
-                borderRadius: BorderRadius.circular(16),
-                child: Container(
-                  padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(
-                    color: Colors.transparent,
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                  child: const Icon(
-                    Icons.auto_awesome_rounded,
-                    size: 20,
-                    color: DpcColors.textSecondary,
-                  ),
-                ),
-              ),
-            ),
-
-          // 3. Center Sync Button
-          Tooltip(
-            message: 'Sync Transactions',
-            child: GestureDetector(
-              onTap: onSyncTap,
-              child: Container(
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  gradient: DpcColors.heroPastel1,
-                  shape: BoxShape.circle,
-                  boxShadow: [
-                    BoxShadow(
-                      color: const Color(0xFF86E3CE).withValues(alpha: 0.35),
-                      blurRadius: 12,
-                      offset: const Offset(0, 4),
-                    ),
-                  ],
-                ),
-                child: isSyncing
-                    ? const SizedBox(
-                        width: 18,
-                        height: 18,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: DpcColors.textContrast,
-                        ),
-                      )
-                    : const Icon(
-                        Icons.sync_rounded,
-                        size: 20,
-                        color: DpcColors.textContrast,
-                      ),
-              ),
-            ),
-          ),
-
-          // 4. Link Bank / Accounts
+          // 4. Link Bank / Accounts (forth page as it is)
           Tooltip(
             message: hasActiveConsent ? 'Bank Feed Active' : 'Link Bank',
             child: InkWell(
@@ -135,25 +144,29 @@ class DpcFloatingNavDock extends StatelessWidget {
               child: Container(
                 padding: const EdgeInsets.all(10),
                 decoration: BoxDecoration(
-                  color: hasActiveConsent
-                      ? DpcColors.accentPositive.withValues(alpha: 0.12)
-                      : Colors.transparent,
+                  color: isBankActive ? DpcColors.surfaceElevated : Colors.transparent,
                   borderRadius: BorderRadius.circular(16),
+                  border: isBankActive
+                      ? Border.all(
+                          color: DpcColors.surfaceBorder,
+                          width: 1,
+                        )
+                      : null,
                 ),
                 child: Icon(
                   hasActiveConsent
                       ? Icons.verified_rounded
                       : Icons.account_balance_rounded,
                   size: 20,
-                  color: hasActiveConsent
-                      ? DpcColors.accentPositive
-                      : DpcColors.textSecondary,
+                  color: isBankActive
+                      ? DpcColors.textPrimary
+                      : (hasActiveConsent ? DpcColors.textPrimary : DpcColors.textSecondary),
                 ),
               ),
             ),
           ),
 
-          // 5. Profile Button (navigates to Profile Page)
+          // 5. Profile Button (fifth page as it is)
           if (onProfileTap != null)
             Tooltip(
               message: 'Profile & Account',
@@ -164,7 +177,7 @@ class DpcFloatingNavDock extends StatelessWidget {
                   duration: const Duration(milliseconds: 200),
                   padding: const EdgeInsets.all(10),
                   decoration: BoxDecoration(
-                    color: isProfileActive ? DpcColors.surfaceTrack : Colors.transparent,
+                    color: isProfileActive ? DpcColors.surfaceElevated : Colors.transparent,
                     borderRadius: BorderRadius.circular(16),
                     border: isProfileActive
                         ? Border.all(
@@ -179,7 +192,7 @@ class DpcFloatingNavDock extends StatelessWidget {
                         : Icons.person_outline_rounded,
                     size: 20,
                     color: isProfileActive
-                        ? DpcColors.accentPrimary
+                        ? DpcColors.textPrimary
                         : DpcColors.textSecondary,
                   ),
                 ),

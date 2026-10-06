@@ -2,7 +2,6 @@ import 'dart:io';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../config/supabase_config.dart';
-import '../models/ai_nudge_model.dart';
 import '../models/transaction_group_model.dart';
 import '../models/transaction_model.dart';
 import '../services/fi_data_service.dart';
@@ -557,19 +556,41 @@ final latestBalanceProvider = Provider<double>((ref) {
   return transactions.first.currentBalance;
 });
 
-/// Derived provider: stats for the active weekly window (spent vs. inflow)
-final weeklyStatsProvider =
-    Provider<({double spent, double inflow, String periodLabel, bool isLive})>((ref) {
+/// Weekly telemetry record encapsulating cash flow and temporal anchoring
+typedef WeeklyTelemetryStats = ({
+  double spent,
+  double inflow,
+  String periodLabel,
+  bool isLive,
+  DateTime? latestTxnTimestamp,
+  DateTime? lastSyncedAt,
+});
+
+/// Derived provider: stats for the active weekly window (spent vs. inflow) with transaction_timestamp and created_at telemetry
+final weeklyStatsProvider = Provider<WeeklyTelemetryStats>((ref) {
   final transactions = ref.watch(transactionFeedProvider).value ?? [];
   if (transactions.isEmpty) {
-    return (spent: 0.0, inflow: 0.0, periodLabel: 'this week', isLive: true);
+    return (
+      spent: 0.0,
+      inflow: 0.0,
+      periodLabel: 'this week',
+      isLive: true,
+      latestTxnTimestamp: null,
+      lastSyncedAt: null,
+    );
   }
 
   final now = DateTime.now();
   DateTime latestTxnDate = transactions.first.transactionTimestamp;
+  DateTime? latestCreatedAt = transactions.first.createdAt;
   for (final t in transactions) {
     if (t.transactionTimestamp.isAfter(latestTxnDate)) {
       latestTxnDate = t.transactionTimestamp;
+    }
+    if (t.createdAt != null) {
+      if (latestCreatedAt == null || t.createdAt!.isAfter(latestCreatedAt)) {
+        latestCreatedAt = t.createdAt;
+      }
     }
   }
 
@@ -628,7 +649,14 @@ final weeklyStatsProvider =
     }
   }
 
-  return (spent: spent, inflow: inflow, periodLabel: label, isLive: isLive);
+  return (
+    spent: spent,
+    inflow: inflow,
+    periodLabel: label,
+    isLive: isLive,
+    latestTxnTimestamp: latestTxnDate,
+    lastSyncedAt: latestCreatedAt,
+  );
 });
 
 /// Derived provider: transactions grouped by timeline section (legacy format)
@@ -719,33 +747,7 @@ final smartGroupedTransactionsProvider = Provider<List<YearGroup>>((ref) {
   );
 });
 
-/// AsyncNotifier managing active AI proactive nudges for the carousel
-class AiNudgesNotifier extends AsyncNotifier<List<AiNudge>> {
-  @override
-  Future<List<AiNudge>> build() async {
-    ref.watch(currentUserProvider);
-    final dbService = ref.watch(supabaseDbServiceProvider);
-    return await dbService.fetchActiveNudges();
-  }
 
-  Future<void> dismiss(String nudgeId) async {
-    final currentList = state.value ?? [];
-    state = AsyncValue.data(currentList.where((n) => n.id != nudgeId).toList());
-    final dbService = ref.read(supabaseDbServiceProvider);
-    await dbService.dismissNudge(nudgeId);
-  }
-
-  Future<void> refresh() async {
-    state = const AsyncValue.loading();
-    state = await AsyncValue.guard(() async {
-      final dbService = ref.read(supabaseDbServiceProvider);
-      return await dbService.fetchActiveNudges();
-    });
-  }
-}
-
-final aiNudgesProvider =
-    AsyncNotifierProvider<AiNudgesNotifier, List<AiNudge>>(AiNudgesNotifier.new);
 
 /// Telemetry filter period index (0: 'all', 1: 'month', 2: '7d', 3: 'debits', 4: 'inflow')
 class TelemetryPeriodIndexNotifier extends Notifier<int> {

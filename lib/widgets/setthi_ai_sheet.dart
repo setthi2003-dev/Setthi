@@ -5,16 +5,21 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../config/dpc_tokens.dart';
 import '../models/chat_message_model.dart';
 import '../providers/chat_providers.dart';
+import 'ai_companion_rive_widget.dart';
 import 'dpc_gauges.dart';
-import 'dpc_telemetry_cards.dart';
 
-/// Full DPC Styled Bottom Sheet Modal for Setthi AI
+/// Full DPC Styled Bottom Sheet Modal or Dedicated Full Page for Setthi AI
 class SetthiAiSheet extends ConsumerStatefulWidget {
   final String? initialPrompt;
+  final bool isFullScreenPage;
 
-  const SetthiAiSheet({super.key, this.initialPrompt});
+  const SetthiAiSheet({
+    super.key,
+    this.initialPrompt,
+    this.isFullScreenPage = false,
+  });
 
-  /// Static helper to display the sheet from anywhere
+  /// Static helper to display the sheet from anywhere as a modal
   static Future<void> show(BuildContext context, {String? initialPrompt}) {
     return showModalBottomSheet(
       context: context,
@@ -34,9 +39,9 @@ class _SetthiAiSheetState extends ConsumerState<SetthiAiSheet> {
   final FocusNode _focusNode = FocusNode();
 
   static const List<String> _quickPrompts = [
-    'How much did I spend this week? 💸',
-    'What is my current balance? 🏦',
-    'Top 3 food orders lately 🍔',
+    'How much did I spend this week?',
+    'What is my current balance?',
+    'Top 3 food orders lately',
   ];
 
   @override
@@ -92,6 +97,97 @@ class _SetthiAiSheetState extends ConsumerState<SetthiAiSheet> {
       _scrollToBottom();
     });
 
+    final mainBody = Column(
+      children: [
+        if (!widget.isFullScreenPage) ...[
+          // Top Drag Handle
+          Center(
+            child: Container(
+              margin: const EdgeInsets.only(top: 12, bottom: 10),
+              width: 38,
+              height: 4,
+              decoration: BoxDecoration(
+                color: DpcColors.surfaceTrack,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+          ),
+
+          // Header
+          _buildHeader(context, credits),
+
+          const Divider(color: DpcColors.surfaceBorder, height: 1),
+        ],
+
+        // Conversation Area
+        Expanded(
+          child: messagesAsync.when(
+            loading:
+                () => const Center(
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: DpcColors.textPrimary,
+                  ),
+                ),
+            error:
+                (err, _) => Center(
+                  child: Text(
+                    'Failed to load chat history: $err',
+                    style: const TextStyle(
+                      color: DpcColors.accentNegative,
+                      fontSize: 12,
+                    ),
+                  ),
+                ),
+            data: (messages) {
+              if (messages.isEmpty) {
+                return _buildEmptyState();
+              }
+
+              return ListView.builder(
+                controller: _scrollController,
+                keyboardDismissBehavior:
+                    ScrollViewKeyboardDismissBehavior.onDrag,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 14,
+                ),
+                itemCount: messages.length,
+                itemBuilder: (context, index) {
+                  final msg = messages[index];
+                  return _buildMessageBubble(msg);
+                },
+              );
+            },
+          ),
+        ),
+
+        // Out-of-credits warning banner
+        if (isZeroCredits) _buildOutOfCreditsBanner(),
+
+        // Input Bar
+        _buildInputBar(isZeroCredits),
+      ],
+    );
+
+    if (widget.isFullScreenPage) {
+      return GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: () => FocusScope.of(context).unfocus(),
+        child: Container(
+          color: DpcColors.bgOled,
+          child: SafeArea(
+            top: false,
+            bottom: false,
+            child: Padding(
+              padding: EdgeInsets.only(bottom: bottomInset),
+              child: mainBody,
+            ),
+          ),
+        ),
+      );
+    }
+
     return Container(
       constraints: BoxConstraints(
         maxHeight: MediaQuery.of(context).size.height * 0.88,
@@ -109,74 +205,7 @@ class _SetthiAiSheetState extends ConsumerState<SetthiAiSheet> {
         top: false,
         child: Padding(
           padding: EdgeInsets.only(bottom: bottomInset),
-          child: Column(
-            children: [
-              // Top Drag Handle
-              Center(
-                child: Container(
-                  margin: const EdgeInsets.only(top: 12, bottom: 10),
-                  width: 38,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: DpcColors.surfaceTrack,
-                    borderRadius: BorderRadius.circular(2),
-                  ),
-                ),
-              ),
-
-              // Header
-              _buildHeader(context, credits),
-
-              const Divider(color: DpcColors.surfaceBorder, height: 1),
-
-              // Conversation Area
-              Expanded(
-                child: messagesAsync.when(
-                  loading:
-                      () => const Center(
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: Color(0xFFE0C3FC),
-                        ),
-                      ),
-                  error:
-                      (err, _) => Center(
-                        child: Text(
-                          'Failed to load chat history: $err',
-                          style: const TextStyle(
-                            color: DpcColors.accentNegative,
-                            fontSize: 12,
-                          ),
-                        ),
-                      ),
-                  data: (messages) {
-                    if (messages.isEmpty) {
-                      return _buildEmptyState();
-                    }
-
-                    return ListView.builder(
-                      controller: _scrollController,
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 16,
-                        vertical: 14,
-                      ),
-                      itemCount: messages.length,
-                      itemBuilder: (context, index) {
-                        final msg = messages[index];
-                        return _buildMessageBubble(msg);
-                      },
-                    );
-                  },
-                ),
-              ),
-
-              // Out-of-credits warning banner
-              if (isZeroCredits) _buildOutOfCreditsBanner(),
-
-              // Input Bar
-              _buildInputBar(isZeroCredits),
-            ],
-          ),
+          child: mainBody,
         ),
       ),
     );
@@ -187,25 +216,23 @@ class _SetthiAiSheetState extends ConsumerState<SetthiAiSheet> {
       padding: const EdgeInsets.fromLTRB(18, 4, 16, 12),
       child: Row(
         children: [
-          // Glowing Lilac AI Sparkle Avatar
+          // Architectural AI Companion Avatar
           Container(
-            width: 38,
-            height: 38,
+            width: 42,
+            height: 42,
             decoration: BoxDecoration(
-              gradient: DpcColors.heroPastel2,
-              borderRadius: BorderRadius.circular(12),
-              boxShadow: [
-                BoxShadow(
-                  color: const Color(0xFFE0C3FC).withValues(alpha: 0.3),
-                  blurRadius: 10,
-                  offset: const Offset(0, 3),
-                ),
-              ],
+              color: DpcColors.surfaceElevated,
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(
+                color: DpcColors.surfaceBorder,
+                width: 1,
+              ),
             ),
-            child: const Icon(
-              Icons.auto_awesome_rounded,
-              size: 20,
-              color: DpcColors.textContrast,
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(13),
+              child: const AiCompanionRiveWidget(
+                size: 40,
+              ),
             ),
           ),
           const SizedBox(width: 12),
@@ -250,16 +277,12 @@ class _SetthiAiSheetState extends ConsumerState<SetthiAiSheet> {
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
             decoration: BoxDecoration(
-              color:
-                  credits > 0
-                      ? const Color(0xFFE0C3FC).withValues(alpha: 0.12)
-                      : DpcColors.accentNegative.withValues(alpha: 0.12),
+              color: DpcColors.surfaceElevated,
               borderRadius: BorderRadius.circular(16),
               border: Border.all(
-                color:
-                    credits > 0
-                        ? const Color(0xFFE0C3FC).withValues(alpha: 0.35)
-                        : DpcColors.accentNegative.withValues(alpha: 0.35),
+                color: credits > 0
+                    ? DpcColors.surfaceBorder
+                    : DpcColors.accentNegative.withValues(alpha: 0.35),
                 width: 1,
               ),
             ),
@@ -269,19 +292,17 @@ class _SetthiAiSheetState extends ConsumerState<SetthiAiSheet> {
                 Icon(
                   Icons.bolt_rounded,
                   size: 14,
-                  color:
-                      credits > 0
-                          ? const Color(0xFFE0C3FC)
-                          : DpcColors.accentNegative,
+                  color: credits > 0
+                      ? DpcColors.textPrimary
+                      : DpcColors.accentNegative,
                 ),
                 const SizedBox(width: 3),
                 Text(
                   '$credits credits',
                   style: TextStyle(
-                    color:
-                        credits > 0
-                            ? const Color(0xFFE0C3FC)
-                            : DpcColors.accentNegative,
+                    color: credits > 0
+                        ? DpcColors.textPrimary
+                        : DpcColors.accentNegative,
                     fontSize: 11.5,
                     fontWeight: FontWeight.w700,
                   ),
@@ -290,6 +311,17 @@ class _SetthiAiSheetState extends ConsumerState<SetthiAiSheet> {
             ),
           ),
           const SizedBox(width: 8),
+
+          // Delete conversation button (with warning confirmation)
+          IconButton(
+            key: const Key('sheet_delete_conversation_button'),
+            icon: const Icon(Icons.delete_sweep_outlined, size: 20),
+            color: DpcColors.textMuted,
+            tooltip: 'Delete Conversation',
+            onPressed: () => showDeleteConversationConfirmation(context, ref),
+            splashRadius: 18,
+          ),
+          const SizedBox(width: 4),
 
           // Close button
           IconButton(
@@ -304,40 +336,45 @@ class _SetthiAiSheetState extends ConsumerState<SetthiAiSheet> {
   }
 
   Widget _buildEmptyState() {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 24),
+    return SingleChildScrollView(
+      physics: const BouncingScrollPhysics(),
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
+          // Setthi AI Companion Animated Hero Logo
           Container(
-            padding: const EdgeInsets.all(16),
+            width: 108,
+            height: 108,
             decoration: BoxDecoration(
-              color: const Color(0xFFE0C3FC).withValues(alpha: 0.08),
+              color: DpcColors.surfaceElevated,
               shape: BoxShape.circle,
               border: Border.all(
-                color: const Color(0xFFE0C3FC).withValues(alpha: 0.2),
-                width: 1,
+                color: DpcColors.surfaceBorder,
+                width: 1.5,
               ),
             ),
-            child: const Icon(
-              Icons.chat_bubble_outline_rounded,
-              size: 28,
-              color: Color(0xFFE0C3FC),
+            child: ClipOval(
+              child: const AiCompanionRiveWidget(
+                size: 105,
+                fit: Fit.cover,
+              ),
             ),
           ),
-          const SizedBox(height: 14),
+          const SizedBox(height: 12),
           const Text(
-            'Ask me anything about your money',
+            'How can I help with your money today?',
             style: TextStyle(
               color: DpcColors.textPrimary,
-              fontSize: 15,
+              fontSize: 16,
               fontWeight: FontWeight.w700,
+              letterSpacing: -0.3,
             ),
             textAlign: TextAlign.center,
           ),
           const SizedBox(height: 6),
           const Text(
-            'Powered by Gemini 2.5 Flash + live verified bank ledger tools. Zero guessing.',
+            'Verified bank ledger intelligence • Deterministic tools • Zero guessing',
             style: TextStyle(
               color: DpcColors.textSecondary,
               fontSize: 12,
@@ -347,7 +384,7 @@ class _SetthiAiSheetState extends ConsumerState<SetthiAiSheet> {
           ),
           const SizedBox(height: 24),
 
-          // Suggestion Chips
+          // Suggestion Chips (Gemini style)
           Align(
             alignment: Alignment.centerLeft,
             child: Text(
@@ -371,7 +408,7 @@ class _SetthiAiSheetState extends ConsumerState<SetthiAiSheet> {
                   width: double.infinity,
                   padding: const EdgeInsets.symmetric(
                     horizontal: 14,
-                    vertical: 11,
+                    vertical: 12,
                   ),
                   decoration: BoxDecoration(
                     color: DpcColors.surfaceElevated,
@@ -383,6 +420,21 @@ class _SetthiAiSheetState extends ConsumerState<SetthiAiSheet> {
                   ),
                   child: Row(
                     children: [
+                      Container(
+                        width: 24,
+                        height: 24,
+                        decoration: BoxDecoration(
+                          color: DpcColors.surfaceElevated,
+                          shape: BoxShape.circle,
+                          border: Border.all(color: DpcColors.surfaceBorder),
+                        ),
+                        child: const Icon(
+                          Icons.auto_awesome_rounded,
+                          size: 13,
+                          color: DpcColors.textPrimary,
+                        ),
+                      ),
+                      const SizedBox(width: 10),
                       Expanded(
                         child: Text(
                           prompt,
@@ -396,7 +448,7 @@ class _SetthiAiSheetState extends ConsumerState<SetthiAiSheet> {
                       const Icon(
                         Icons.arrow_forward_rounded,
                         size: 15,
-                        color: Color(0xFFE0C3FC),
+                        color: DpcColors.textSecondary,
                       ),
                     ],
                   ),
@@ -425,78 +477,167 @@ class _SetthiAiSheetState extends ConsumerState<SetthiAiSheet> {
             .trim();
         if (rawJson != null && rawJson.isNotEmpty) {
           try {
-            widgetData = jsonDecode(rawJson) as Map<String, dynamic>;
+            final parsed = jsonDecode(rawJson) as Map<String, dynamic>;
+            final widgetType = parsed['type']?.toString().toLowerCase();
+            if (widgetType == 'segmented_bar' || widgetType == 'radial_gauge') {
+              widgetData = parsed;
+            }
           } catch (e) {
             debugPrint('[Setthi AI] Widget JSON parse error: $e');
           }
         }
       }
+
+      // Guarantee 100% emoji-free responses across all historical and incoming assistant messages
+      displayContent = displayContent
+          .replaceAll(
+            RegExp(
+              r'[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE00}-\u{FE0F}\u{1F900}-\u{1F9FF}\u{1F600}-\u{1F64F}\u{1F680}-\u{1F6FF}\u{200D}\u{2300}-\u{23FF}\u{2B50}]',
+              unicode: true,
+            ),
+            '',
+          )
+          .replaceAll(RegExp(r' {2,}'), ' ')
+          .trim();
     }
 
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 6),
-      child: Row(
-        mainAxisAlignment:
-            isUser ? MainAxisAlignment.end : MainAxisAlignment.start,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          if (!isUser) ...[
-            Container(
-              margin: const EdgeInsets.only(right: 8, top: 2),
-              width: 26,
-              height: 26,
-              decoration: BoxDecoration(
-                gradient: DpcColors.heroPastel2,
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: const Icon(
-                Icons.auto_awesome_rounded,
-                size: 13,
-                color: DpcColors.textContrast,
+    // 1. User Message: Sleek, right-aligned modern pill (Gemini/ChatGPT style)
+    if (isUser) {
+      return Padding(
+        padding: const EdgeInsets.only(top: 14, bottom: 6, left: 40),
+        child: Align(
+          alignment: Alignment.centerRight,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+            decoration: BoxDecoration(
+              color: DpcColors.surfaceElevated,
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(
+                color: DpcColors.surfaceBorder.withValues(alpha: 0.8),
+                width: 1,
               ),
             ),
-          ],
-          Flexible(
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-              decoration: BoxDecoration(
-                color:
-                    isUser
-                        ? DpcColors.surfaceTrack
-                        : DpcColors.surfaceElevated,
-                borderRadius: BorderRadius.only(
-                  topLeft: const Radius.circular(16),
-                  topRight: const Radius.circular(16),
-                  bottomLeft: Radius.circular(isUser ? 16 : 4),
-                  bottomRight: Radius.circular(isUser ? 4 : 16),
+            child: _buildFormattedContent(displayContent, true),
+          ),
+        ),
+      );
+    }
+
+    // 2. Assistant Message: NO CHAT BUBBLE. Expansive typography directly on canvas
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Model branding header with glowing sparkle
+          Row(
+            children: [
+              Container(
+                width: 28,
+                height: 28,
+                decoration: BoxDecoration(
+                  color: DpcColors.surfaceElevated,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: DpcColors.surfaceBorder),
                 ),
-                border: Border.all(
-                  color:
-                      isUser
-                          ? DpcColors.surfaceBorder
-                          : const Color(0xFFE0C3FC).withValues(alpha: 0.22),
-                  width: 1,
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(7),
+                  child: const AiCompanionRiveWidget(
+                    size: 26,
+                  ),
                 ),
               ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
+              const SizedBox(width: 9),
+              const Text(
+                'Setthi AI',
+                style: TextStyle(
+                  color: DpcColors.textPrimary,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: -0.2,
+                ),
+              ),
+              if (msg.isStreaming) ...[
+                const SizedBox(width: 8),
+                Container(
+                  width: 6,
+                  height: 6,
+                  decoration: const BoxDecoration(
+                    color: Color(0xFF38BDF8),
+                    shape: BoxShape.circle,
+                  ),
+                ),
+              ],
+            ],
+          ),
+          const SizedBox(height: 10),
+
+          // Message content flows naturally without an enclosing bubble box
+          Padding(
+            padding: const EdgeInsets.only(left: 4),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (msg.isStreaming && displayContent.isEmpty && widgetData == null)
+                  _buildThinkingIndicator()
+                else if (displayContent.isNotEmpty)
+                  _buildFormattedContent(displayContent, false)
+                else if (!msg.isStreaming && widgetData == null)
+                  _buildFormattedContent(
+                    'I checked your account, but couldn\'t find any matching records for that request. Try asking about your overall balance or recent transfers!',
+                    false,
+                  ),
+                if (widgetData != null)
+                  _buildGenerativeWidget(widgetData),
+              ],
+            ),
+          ),
+
+          // Minimalist Action Row (Copy, feedback)
+          if (!msg.isStreaming && displayContent.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 8, left: 4),
+              child: Row(
                 children: [
-                  if (msg.isStreaming && displayContent.isEmpty && widgetData == null)
-                    _buildThinkingIndicator()
-                  else if (displayContent.isNotEmpty)
-                    _buildFormattedContent(displayContent, isUser)
-                  else if (!msg.isStreaming && !isUser && widgetData == null)
-                    _buildFormattedContent(
-                      'I checked your account, but couldn\'t find any matching records for that request. Try asking about your overall balance or recent transfers!',
-                      isUser,
+                  InkWell(
+                    onTap: () {
+                      Clipboard.setData(ClipboardData(text: displayContent));
+                      HapticFeedback.lightImpact();
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('Response copied to clipboard'),
+                          duration: Duration(seconds: 2),
+                          behavior: SnackBarBehavior.floating,
+                        ),
+                      );
+                    },
+                    borderRadius: BorderRadius.circular(6),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: const [
+                          Icon(
+                            Icons.copy_rounded,
+                            size: 13,
+                            color: DpcColors.textMuted,
+                          ),
+                          SizedBox(width: 4),
+                          Text(
+                            'Copy',
+                            style: TextStyle(
+                              color: DpcColors.textMuted,
+                              fontSize: 11,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
-                  if (widgetData != null)
-                    _buildGenerativeWidget(widgetData),
+                  ),
                 ],
               ),
             ),
-          ),
         ],
       ),
     );
@@ -505,37 +646,7 @@ class _SetthiAiSheetState extends ConsumerState<SetthiAiSheet> {
   Widget _buildGenerativeWidget(Map<String, dynamic> data) {
     final type = data['type']?.toString().toLowerCase();
 
-    if (type == 'split_card') {
-      final title = data['title']?.toString() ?? 'CASH FLOW';
-      final progress =
-          ((data['gaugeProgress'] ?? 0.5) as num).toDouble().clamp(0.0, 1.0);
-      final label = data['gaugeLabel']?.toString() ?? 'Ratio';
-      final rawKv = data['keyValues'] as List<dynamic>? ?? [];
-      final keyValues = rawKv.map((kv) {
-        final m = kv as Map<String, dynamic>;
-        Color? c;
-        final rawColor = m['color']?.toString();
-        if (rawColor != null && rawColor.startsWith('#')) {
-          final hex = rawColor.replaceAll('#', '');
-          if (hex.length == 6) c = Color(int.parse('0xFF$hex'));
-        }
-        return (
-          label: m['label']?.toString() ?? '',
-          value: m['value']?.toString() ?? '',
-          color: c,
-        );
-      }).toList();
-
-      return Padding(
-        padding: const EdgeInsets.only(top: 10),
-        child: DpcSplitTelemetryCard(
-          title: title,
-          gaugeProgress: progress,
-          gaugeLabel: label,
-          keyValues: keyValues,
-        ),
-      );
-    } else if (type == 'segmented_bar') {
+    if (type == 'segmented_bar') {
       final title = data['title']?.toString() ?? 'SPEND BREAKDOWN';
       final rawSegments = data['segments'] as List<dynamic>? ?? [];
       double totalVal = 0;
@@ -679,9 +790,9 @@ class _SetthiAiSheetState extends ConsumerState<SetthiAiSheet> {
   Widget _buildFormattedContent(String content, bool isUser) {
     final baseStyle = TextStyle(
       color: isUser ? DpcColors.textPrimary : const Color(0xFFF1F1F5),
-      fontSize: 13.5,
-      height: 1.45,
-      letterSpacing: -0.1,
+      fontSize: isUser ? 13.5 : 14.5,
+      height: isUser ? 1.45 : 1.55,
+      letterSpacing: isUser ? -0.1 : -0.15,
     );
 
     final spans = _parseMarkdownSpans(content, isUser, baseStyle);
@@ -802,14 +913,14 @@ class _SetthiAiSheetState extends ConsumerState<SetthiAiSheet> {
           height: 12,
           child: CircularProgressIndicator(
             strokeWidth: 1.8,
-            color: Color(0xFFE0C3FC),
+            color: DpcColors.textPrimary,
           ),
         ),
         const SizedBox(width: 8),
-        Text(
+        const Text(
           'Checking ledger & crunching numbers...',
           style: TextStyle(
-            color: const Color(0xFFE0C3FC).withValues(alpha: 0.85),
+            color: DpcColors.textSecondary,
             fontSize: 12,
             fontStyle: FontStyle.italic,
           ),
@@ -860,6 +971,7 @@ class _SetthiAiSheetState extends ConsumerState<SetthiAiSheet> {
         color: DpcColors.surfaceDark,
         border: Border(
           top: BorderSide(color: DpcColors.surfaceBorder, width: 1),
+          bottom: BorderSide(color: DpcColors.surfaceBorder, width: 1),
         ),
       ),
       child: Row(
@@ -880,6 +992,7 @@ class _SetthiAiSheetState extends ConsumerState<SetthiAiSheet> {
                 controller: _inputController,
                 focusNode: _focusNode,
                 enabled: !isZeroCredits,
+                textInputAction: TextInputAction.send,
                 onSubmitted: (_) => _handleSend(),
                 style: const TextStyle(
                   color: DpcColors.textPrimary,
@@ -940,4 +1053,251 @@ class _SetthiAiSheetState extends ConsumerState<SetthiAiSheet> {
       ),
     );
   }
+}
+
+/// Confirmation modal taking user confirmation with an explicit warning before deleting conversation
+Future<bool?> showDeleteConversationConfirmation(
+  BuildContext context,
+  WidgetRef ref,
+) {
+  return showModalBottomSheet<bool>(
+    context: context,
+    backgroundColor: Colors.transparent,
+    isScrollControlled: true,
+    builder: (modalContext) {
+      bool isDeleting = false;
+
+      return StatefulBuilder(
+        builder: (context, setModalState) {
+          return Container(
+            decoration: const BoxDecoration(
+              color: DpcColors.surfaceDark,
+              borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+              border: Border(
+                top: BorderSide(color: DpcColors.surfaceBorder, width: 1),
+                left: BorderSide(color: DpcColors.surfaceBorder, width: 1),
+                right: BorderSide(color: DpcColors.surfaceBorder, width: 1),
+              ),
+            ),
+            padding: EdgeInsets.only(
+              left: 20,
+              right: 20,
+              top: 14,
+              bottom: MediaQuery.of(context).padding.bottom + 20,
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Drag handle
+                Center(
+                  child: Container(
+                    width: 36,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: DpcColors.surfaceTrack,
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 18),
+
+                // Warning Icon + Title
+                Row(
+                  children: [
+                    Container(
+                      width: 40,
+                      height: 40,
+                      decoration: BoxDecoration(
+                        color: DpcColors.accentNegative.withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: DpcColors.accentNegative.withValues(alpha: 0.3),
+                          width: 1,
+                        ),
+                      ),
+                      child: const Icon(
+                        Icons.warning_amber_rounded,
+                        color: DpcColors.accentNegative,
+                        size: 22,
+                      ),
+                    ),
+                    const SizedBox(width: 14),
+                    const Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Delete Conversation?',
+                            style: TextStyle(
+                              color: DpcColors.textPrimary,
+                              fontSize: 17,
+                              fontWeight: FontWeight.w700,
+                              letterSpacing: -0.3,
+                            ),
+                          ),
+                          SizedBox(height: 2),
+                          Text(
+                            'This action is irreversible',
+                            style: TextStyle(
+                              color: DpcColors.accentNegative,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+
+                // Warning description card
+                Container(
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: DpcColors.surfaceElevated,
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(
+                      color: DpcColors.surfaceBorder,
+                      width: 1,
+                    ),
+                  ),
+                  child: const Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Icon(
+                        Icons.info_outline_rounded,
+                        color: DpcColors.textSecondary,
+                        size: 18,
+                      ),
+                      SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          'All messages in this conversation will be permanently removed from this device and deleted from our cloud servers. Your AI credits will remain unchanged.',
+                          style: TextStyle(
+                            color: DpcColors.textSecondary,
+                            fontSize: 12.5,
+                            height: 1.45,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 22),
+
+                // Action buttons
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextButton(
+                        onPressed: isDeleting
+                            ? null
+                            : () => Navigator.of(modalContext).pop(false),
+                        style: TextButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                        ),
+                        child: const Text(
+                          'Cancel',
+                          style: TextStyle(
+                            color: DpcColors.textSecondary,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      flex: 2,
+                      child: ElevatedButton.icon(
+                        key: const Key('confirm_delete_conversation_button'),
+                        onPressed: isDeleting
+                            ? null
+                            : () async {
+                                setModalState(() => isDeleting = true);
+                                final success = await ref
+                                    .read(chatMessagesProvider.notifier)
+                                    .clearHistory();
+                                if (modalContext.mounted) {
+                                  Navigator.of(modalContext).pop(true);
+                                }
+                                if (context.mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                      backgroundColor: DpcColors.surfaceDark,
+                                      behavior: SnackBarBehavior.floating,
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(12),
+                                      ),
+                                      content: Row(
+                                        children: [
+                                          Icon(
+                                            success
+                                                ? Icons.check_circle_rounded
+                                                : Icons.error_outline_rounded,
+                                            color: success
+                                                ? DpcColors.accentPositive
+                                                : DpcColors.accentNegative,
+                                            size: 18,
+                                          ),
+                                          const SizedBox(width: 8),
+                                          Expanded(
+                                            child: Text(
+                                              success
+                                                  ? 'Conversation permanently deleted'
+                                                  : 'Failed to delete from server',
+                                              style: const TextStyle(
+                                                color: DpcColors.textPrimary,
+                                                fontSize: 13,
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  );
+                                }
+                              },
+                        icon: isDeleting
+                            ? const SizedBox(
+                                width: 16,
+                                height: 16,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: Colors.white,
+                                ),
+                              )
+                            : const Icon(Icons.delete_forever_rounded, size: 18),
+                        label: Text(
+                          isDeleting ? 'Deleting...' : 'Delete Conversation',
+                          style: const TextStyle(
+                            fontSize: 13.5,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: DpcColors.accentNegative,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          elevation: 0,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          );
+        },
+      );
+    },
+  );
 }

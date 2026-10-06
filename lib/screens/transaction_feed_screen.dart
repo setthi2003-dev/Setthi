@@ -15,8 +15,10 @@ import '../widgets/dpc_telemetry_cards.dart';
 import '../widgets/slide_to_confirm.dart';
 import '../widgets/bank_sync_permission_sheet.dart';
 import '../widgets/setthi_ai_sheet.dart';
+import '../widgets/ai_companion_rive_widget.dart';
 import '../providers/chat_providers.dart';
 import '../widgets/profile_completion_dialog.dart';
+import '../widgets/dpc_safe_to_spend_card.dart';
 import 'setu_consent_webview.dart';
 
 /// Full DPC Redesign of the Setthi Transaction Feed & Telemetry Dashboard.
@@ -35,8 +37,8 @@ class TransactionFeedScreen extends ConsumerStatefulWidget {
 
 class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
   final ScrollController _scrollController = ScrollController();
-  int _activeNavIndex =
-      0; // 0: Dashboard (Screen A), 1: Telemetry (Screen B, kept for reference)
+  // 0: AI Page, 1: Telemetry & Analytics, 2: Present Homepage with Total Balance, 3: Bank, 4: Profile
+  int _activeNavIndex = 2;
   int _telemetryFilterIndex = 0; // Kept for reference
   bool _hasPromptedProfileCompletion = false;
 
@@ -109,7 +111,7 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
 
   void _onScroll() {
     if (!_scrollController.hasClients) return;
-    if (_activeNavIndex != 0) return;
+    if (_activeNavIndex != 2) return;
     _checkAutoFetch(_scrollController.position);
   }
 
@@ -137,11 +139,16 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
     final hasActiveConsent = ref.watch(hasActiveConsentProvider);
     final isSyncing = transactionFeedAsync.isLoading;
 
+    final hasKeyboard = MediaQuery.viewInsetsOf(context).bottom > 0;
+
     return Scaffold(
       backgroundColor: DpcColors.bgOled,
-      appBar: _buildDpcAppBar(context, ref, hasActiveConsent),
-      extendBody: true,
+      appBar: _buildDpcAppBar(context, ref, hasActiveConsent, isSyncing),
+      extendBody: _activeNavIndex != 0,
       body: RefreshIndicator(
+        notificationPredicate: (notification) =>
+            _activeNavIndex != 0 &&
+            defaultScrollNotificationPredicate(notification),
         onRefresh: () => _handleSyncAction(context, ref),
         color: DpcColors.accentPositive,
         backgroundColor: DpcColors.surfaceDark,
@@ -170,11 +177,14 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
             return _buildSkeletonLoader();
           },
           error: (err, stack) {
-            if (_activeNavIndex == 1) {
-              return _buildProfileScreen(context, ref);
+            if (_activeNavIndex == 0) {
+              return const SetthiAiSheet(isFullScreenPage: true);
             }
-            if (_activeNavIndex == 2) {
+            if (_activeNavIndex == 1) {
               return _buildTelemetryScreen(context, ref, const []);
+            }
+            if (_activeNavIndex == 4) {
+              return _buildProfileScreen(context, ref);
             }
             if (transactionFeedAsync.hasValue &&
                 transactionFeedAsync.value!.isNotEmpty) {
@@ -190,14 +200,22 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
           },
         ),
       ),
-      bottomNavigationBar: DpcFloatingNavDock(
-        activeIndex: _activeNavIndex,
+      bottomNavigationBar: hasKeyboard
+          ? null
+          : DpcFloatingNavDock(
+              activeIndex: _activeNavIndex,
+        onAiTap: () {
+          setState(() => _activeNavIndex = 0);
+        },
+        onTelemetryTap: () {
+          setState(() => _activeNavIndex = 1);
+        },
         onHomeTap: () {
           if (ref.read(transactionFeedProvider).hasError) {
             ref.read(transactionFeedProvider.notifier).dismissErrorAndGoHome();
           }
-          if (_activeNavIndex != 0) {
-            setState(() => _activeNavIndex = 0);
+          if (_activeNavIndex != 2) {
+            setState(() => _activeNavIndex = 2);
           } else if (_scrollController.hasClients) {
             _scrollController.animateTo(
               0,
@@ -206,12 +224,11 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
             );
           }
         },
-        onAiChatTap: () => SetthiAiSheet.show(context),
-        onSyncTap: () => _handleSyncAction(context, ref),
         onBankTap: () => _showLinkBankBottomSheet(context, ref),
         onProfileTap: () {
-          setState(() => _activeNavIndex = 1);
+          setState(() => _activeNavIndex = 4);
         },
+        onSyncTap: () => _handleSyncAction(context, ref),
         isSyncing: isSyncing,
         hasActiveConsent: hasActiveConsent,
       ),
@@ -223,8 +240,140 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
     BuildContext context,
     WidgetRef ref,
     bool hasActiveConsent,
+    bool isSyncing,
   ) {
+    if (_activeNavIndex == 0) {
+      // Setthi AI Full Page AppBar
+      final credits = ref.watch(aiCreditsProvider);
+      return AppBar(
+        elevation: 0,
+        backgroundColor: DpcColors.bgOled,
+        surfaceTintColor: Colors.transparent,
+        titleSpacing: 18,
+        title: Row(
+          children: [
+            Container(
+              width: 38,
+              height: 38,
+              decoration: BoxDecoration(
+                color: DpcColors.surfaceDark,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: DpcColors.surfaceBorder,
+                  width: 1,
+                ),
+              ),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(11),
+                child: const AiCompanionRiveWidget(
+                  size: 36,
+                ),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Row(
+                  children: [
+                    const Text(
+                      'Setthi AI',
+                      style: TextStyle(
+                        color: DpcColors.textPrimary,
+                        fontSize: 18,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: -0.4,
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    Container(
+                      width: 6,
+                      height: 6,
+                      decoration: const BoxDecoration(
+                        color: DpcColors.accentPositive,
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                  ],
+                ),
+                const Text(
+                  'Smart Finance Companion',
+                  style: TextStyle(
+                    color: DpcColors.textMuted,
+                    fontSize: 10.5,
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+        actions: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+            decoration: BoxDecoration(
+              color: DpcColors.surfaceElevated,
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(
+                color: DpcColors.surfaceBorder,
+                width: 1,
+              ),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(
+                  Icons.bolt_rounded,
+                  size: 13,
+                  color: DpcColors.textPrimary,
+                ),
+                const SizedBox(width: 4),
+                Text(
+                  '$credits credits',
+                  style: const TextStyle(
+                    color: DpcColors.textPrimary,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          IconButton(
+            key: const Key('delete_conversation_button'),
+            icon: const Icon(Icons.delete_sweep_outlined, size: 20, color: DpcColors.textSecondary),
+            tooltip: 'Delete Conversation',
+            onPressed: () => showDeleteConversationConfirmation(context, ref),
+          ),
+          const SizedBox(width: 6),
+        ],
+      );
+    }
+
     if (_activeNavIndex == 1) {
+      // Telemetry Screen AppBar
+      return AppBar(
+        elevation: 0,
+        backgroundColor: DpcColors.bgOled,
+        surfaceTintColor: Colors.transparent,
+        titleSpacing: 18,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back_rounded, color: DpcColors.textPrimary),
+          onPressed: () => setState(() => _activeNavIndex = 2),
+        ),
+        title: const Text(
+          'Telemetry & Analytics',
+          style: TextStyle(
+            color: DpcColors.textPrimary,
+            fontSize: 20,
+            fontWeight: FontWeight.w800,
+            letterSpacing: -0.6,
+          ),
+        ),
+      );
+    }
+
+    if (_activeNavIndex == 4) {
       // Profile Screen AppBar
       return AppBar(
         elevation: 0,
@@ -243,30 +392,7 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
       );
     }
 
-    if (_activeNavIndex == 2) {
-      // Telemetry Screen AppBar
-      return AppBar(
-        elevation: 0,
-        backgroundColor: DpcColors.bgOled,
-        surfaceTintColor: Colors.transparent,
-        titleSpacing: 18,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back_rounded, color: DpcColors.textPrimary),
-          onPressed: () => setState(() => _activeNavIndex = 0),
-        ),
-        title: const Text(
-          'Telemetry & Analytics',
-          style: TextStyle(
-            color: DpcColors.textPrimary,
-            fontSize: 20,
-            fontWeight: FontWeight.w800,
-            letterSpacing: -0.6,
-          ),
-        ),
-      );
-    }
-
-    // Home AppBar (Profile button removed; moved to bottom dock)
+    // Home AppBar (Page 3: Total Balance & Home)
     return AppBar(
       elevation: 0,
       backgroundColor: DpcColors.bgOled,
@@ -308,6 +434,27 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
           ),
         ],
       ),
+      actions: [
+        IconButton(
+          icon: isSyncing
+              ? const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: DpcColors.accentPositive,
+                  ),
+                )
+              : const Icon(
+                  Icons.sync_rounded,
+                  color: DpcColors.textSecondary,
+                  size: 20,
+                ),
+          tooltip: 'Sync Transactions',
+          onPressed: isSyncing ? null : () => _handleSyncAction(context, ref),
+        ),
+        const SizedBox(width: 8),
+      ],
     );
   }
 
@@ -318,15 +465,19 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
     bool hasActiveConsent,
     bool isSyncing,
   ) {
-    if (_activeNavIndex == 1) {
-      // Dedicated Profile Screen
-      return _buildProfileScreen(context, ref);
+    if (_activeNavIndex == 0) {
+      // Dedicated Setthi AI Full Page
+      return const SetthiAiSheet(isFullScreenPage: true);
     }
-    if (_activeNavIndex == 2) {
+    if (_activeNavIndex == 1) {
       // Screen B: Telemetry & Analytics Dashboard
       return _buildTelemetryScreen(context, ref, transactions);
     }
-    // Screen A: Dashboard & Hero Carousel
+    if (_activeNavIndex == 4) {
+      // Dedicated Profile Screen
+      return _buildProfileScreen(context, ref);
+    }
+    // Screen A: Dashboard & Hero Carousel (Present Homepage with Total Balance)
     return _buildDashboardScreen(
       context,
       ref,
@@ -334,6 +485,69 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
       hasActiveConsent,
       isSyncing,
     );
+  }
+
+  /// Extracts category spend items from telemetry data or falls back to transaction grouping
+  List<CategorySpendItem> _extractCategorySpendItems(
+    Map<String, dynamic>? telemetryData,
+    List<BankTransaction> transactions,
+  ) {
+    final rawCategories = telemetryData?['category_distribution'];
+    final List<dynamic> categoryList = rawCategories is List ? rawCategories : [];
+    final List<CategorySpendItem> categoryItems = [];
+    if (categoryList.isNotEmpty) {
+      for (final cat in categoryList) {
+        if (cat is Map) {
+          final name = cat['category']?.toString() ?? 'Uncategorized';
+          final amt = ((cat['amount'] ?? 0.0) as num).toDouble();
+          final count = ((cat['count'] ?? 0) as num).toInt();
+          final pct = ((cat['percentage'] ?? 0.0) as num).toDouble();
+          if (amt > 0) {
+            categoryItems.add(CategorySpendItem(
+              category: name,
+              amount: amt,
+              count: count,
+              percentage: pct,
+              color: getCategorySpendColor(name),
+              icon: getCategorySpendIcon(name),
+            ));
+          }
+        }
+      }
+    } else if (transactions.isNotEmpty) {
+      // Local fallback calculated from loaded transactions (offline or prior to network response)
+      final debitTxns = transactions.where((t) => t.isDebit).toList();
+      final Map<String, List<BankTransaction>> grouped = {};
+      double fallbackTotal = 0;
+      for (final t in debitTxns) {
+        final cat = (t.category != null && t.category!.trim().isNotEmpty)
+            ? t.category!.trim()
+            : 'Uncategorized';
+        grouped.putIfAbsent(cat, () => []).add(t);
+        fallbackTotal += t.amount;
+      }
+      final sortedEntries = grouped.entries.toList()
+        ..sort((a, b) {
+          final sumA = a.value.fold<double>(0, (acc, item) => acc + item.amount);
+          final sumB = b.value.fold<double>(0, (acc, item) => acc + item.amount);
+          return sumB.compareTo(sumA);
+        });
+
+      for (final entry in sortedEntries) {
+        final catSum = entry.value.fold<double>(0, (acc, item) => acc + item.amount);
+        if (catSum > 0) {
+          categoryItems.add(CategorySpendItem(
+            category: entry.key,
+            amount: catSum,
+            count: entry.value.length,
+            percentage: fallbackTotal > 0 ? ((catSum / fallbackTotal) * 100) : 0.0,
+            color: getCategorySpendColor(entry.key),
+            icon: getCategorySpendIcon(entry.key),
+          ));
+        }
+      }
+    }
+    return categoryItems;
   }
 
   // ==========================================
@@ -348,6 +562,16 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
   ) {
     final balance = ref.watch(latestBalanceProvider);
     final weeklyStats = ref.watch(weeklyStatsProvider);
+    final telemetryAsync = ref.watch(telemetryMetricsProvider);
+    final telemetryData = telemetryAsync.value;
+    final categoryItems = _extractCategorySpendItems(telemetryData, transactions);
+    double catTotalSpent = 0;
+    for (final item in categoryItems) {
+      catTotalSpent += item.amount;
+    }
+    if (catTotalSpent <= 0) {
+      catTotalSpent = ((telemetryData?['total_spent'] ?? weeklyStats.spent) as num).toDouble();
+    }
     final yearGroups = ref.watch(smartGroupedTransactionsProvider);
     final sortOrder = ref.watch(transactionSortOrderProvider);
     final typeFilter = ref.watch(transactionTypeFilterProvider);
@@ -383,26 +607,50 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
           ),
         ),
 
-        // 2. Floating Horizontal Hero Carousel (Screen edge-to-edge with peeking affordance)
-        SliverToBoxAdapter(
-          child: Padding(
-            padding: const EdgeInsets.only(top: 14, bottom: 8),
-            child: DpcHeroCarousel(
-              items: _buildHeroCarouselItems(
-                context,
-                ref,
-                hasActiveConsent: hasActiveConsent,
-                weeklyStats: weeklyStats,
-                isSyncing: isSyncing,
+        // Cashflow Rhythm & Safe-to-Spend Today / This Week Engine Card
+        // Displayed when bank account is linked or transactions exist for the user
+        if (hasActiveConsent || transactions.isNotEmpty)
+          const SliverToBoxAdapter(
+            child: Padding(
+              padding: EdgeInsets.fromLTRB(18, 4, 18, 8),
+              child: DpcSafeToSpendCard(),
+            ),
+          ),
+
+        // Spend Graph Based on Category (Relocated from Telemetry to Home page below total available balance)
+        if (transactions.isNotEmpty || categoryItems.isNotEmpty)
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(18, 4, 18, 8),
+              child: DpcCategorySpendCard(
+                items: categoryItems,
+                totalSpent: catTotalSpent,
+                periodLabel: weeklyStats.isLive ? 'This Week' : weeklyStats.periodLabel,
               ),
             ),
           ),
-        ),
+
+        // 2. Floating Horizontal Hero Carousel (Screen edge-to-edge with peeking affordance)
+        // [COMMENTED OUT - DO NOT REMOVE]
+        // SliverToBoxAdapter(
+        //   child: Padding(
+        //     padding: const EdgeInsets.only(top: 14, bottom: 8),
+        //     child: DpcHeroCarousel(
+        //       items: _buildHeroCarouselItems(
+        //         context,
+        //         ref,
+        //         hasActiveConsent: hasActiveConsent,
+        //         weeklyStats: weeklyStats,
+        //         isSyncing: isSyncing,
+        //       ),
+        //     ),
+        //   ),
+        // ),
 
         if (transactions.isNotEmpty)
           SliverToBoxAdapter(
             child: Padding(
-              padding: const EdgeInsets.fromLTRB(18, 12, 18, 8),
+              padding: const EdgeInsets.fromLTRB(18, 6, 18, 8),
               child: _buildFilterAndSortBar(
                 context,
                 ref,
@@ -652,9 +900,7 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
                   color: DpcColors.surfaceDark,
                   borderRadius: BorderRadius.circular(16),
                   border: Border.all(
-                    color: sortOrder == TransactionSortOrder.latestFirst
-                        ? const Color(0xFF86E3CE).withValues(alpha: 0.5)
-                        : const Color(0xFFFFB3BA).withValues(alpha: 0.5),
+                    color: DpcColors.surfaceBorder,
                     width: 1,
                   ),
                 ),
@@ -666,19 +912,15 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
                           ? Icons.south_rounded
                           : Icons.north_rounded,
                       size: 12,
-                      color: sortOrder == TransactionSortOrder.latestFirst
-                          ? const Color(0xFF86E3CE)
-                          : const Color(0xFFFFB3BA),
+                      color: DpcColors.textPrimary,
                     ),
                     const SizedBox(width: 4),
                     Text(
                       sortOrder == TransactionSortOrder.latestFirst
                           ? 'Latest'
                           : 'Oldest',
-                      style: TextStyle(
-                        color: sortOrder == TransactionSortOrder.latestFirst
-                            ? const Color(0xFF86E3CE)
-                            : const Color(0xFFFFB3BA),
+                      style: const TextStyle(
+                        color: DpcColors.textPrimary,
                         fontSize: 11,
                         fontWeight: FontWeight.w700,
                       ),
@@ -707,7 +949,6 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
           _buildFilterChip(
             label: 'Debits ↓',
             isSelected: typeFilter == TransactionTypeFilter.debitOnly,
-            accentColor: const Color(0xFFFF6E7F),
             onTap: () =>
                 ref.read(transactionTypeFilterProvider.notifier).state =
                     TransactionTypeFilter.debitOnly,
@@ -718,7 +959,6 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
           _buildFilterChip(
             label: 'Credits ↑',
             isSelected: typeFilter == TransactionTypeFilter.creditOnly,
-            accentColor: DpcColors.accentPositive,
             onTap: () =>
                 ref.read(transactionTypeFilterProvider.notifier).state =
                     TransactionTypeFilter.creditOnly,
@@ -729,7 +969,6 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
           _buildFilterChip(
             label: 'Untagged',
             isSelected: typeFilter == TransactionTypeFilter.untagged,
-            accentColor: const Color(0xFFFBBF24),
             onTap: () =>
                 ref.read(transactionTypeFilterProvider.notifier).state =
                     TransactionTypeFilter.untagged,
@@ -752,7 +991,6 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
               _buildFilterChip(
                 label: '$y',
                 isSelected: selectedYear == y,
-                accentColor: const Color(0xFFA78BFA),
                 onTap: () =>
                     ref.read(transactionSelectedYearProvider.notifier).state =
                         y,
@@ -768,9 +1006,7 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
     required String label,
     required bool isSelected,
     required VoidCallback onTap,
-    Color? accentColor,
   }) {
-    final effectiveAccent = accentColor ?? DpcColors.accentPositive;
     return Material(
       color: Colors.transparent,
       child: InkWell(
@@ -781,12 +1017,12 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
           decoration: BoxDecoration(
             color: isSelected
-                ? effectiveAccent.withValues(alpha: 0.14)
+                ? DpcColors.surfaceElevated
                 : DpcColors.surfaceDark,
             borderRadius: BorderRadius.circular(16),
             border: Border.all(
               color: isSelected
-                  ? effectiveAccent.withValues(alpha: 0.7)
+                  ? DpcColors.textPrimary.withValues(alpha: 0.35)
                   : DpcColors.surfaceBorder,
               width: 1,
             ),
@@ -794,7 +1030,7 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
           child: Text(
             label,
             style: TextStyle(
-              color: isSelected ? effectiveAccent : DpcColors.textSecondary,
+              color: isSelected ? DpcColors.textPrimary : DpcColors.textSecondary,
               fontSize: 11,
               fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
             ),
@@ -996,30 +1232,15 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
   }
 
   /// Floating Horizontal Hero Carousel Items as defined in DPC Screen A
+  // [COMMENTED OUT FROM UI - DO NOT REMOVE]
+  // ignore: unused_element
   List<DpcHeroCardItem> _buildHeroCarouselItems(
     BuildContext context,
     WidgetRef ref, {
     required bool hasActiveConsent,
-    required ({double spent, double inflow, String periodLabel, bool isLive}) weeklyStats,
+    required WeeklyTelemetryStats weeklyStats,
     required bool isSyncing,
   }) {
-    final activeNudges = ref.watch(aiNudgesProvider).value ?? [];
-
-    LinearGradient resolveNudgeGradient(String style) {
-      switch (style) {
-        case 'heroPastel1':
-          return DpcColors.heroPastel1;
-        case 'heroPastel2':
-          return DpcColors.heroPastel2;
-        case 'heroPastel3':
-          return DpcColors.heroPastel3;
-        case 'heroPastel4':
-          return DpcColors.heroPastel4;
-        default:
-          return DpcColors.heroPastel2;
-      }
-    }
-
     final card1 = DpcHeroCardItem(
       title: 'Setu AA ReBIT Gateway',
       subtitle: hasActiveConsent
@@ -1038,66 +1259,37 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
           : _showLinkBankBottomSheet(context, ref),
     );
 
-    // Card 2: Dynamic Nudge 1 or Fallback Cashflow Overview
-    final card2 = activeNudges.isNotEmpty
-        ? DpcHeroCardItem(
-            title: activeNudges[0].headline,
-            subtitle: activeNudges[0].body,
-            badgeText: activeNudges[0].badgeText,
-            icon: Icons.lightbulb_rounded,
-            gradient: resolveNudgeGradient(activeNudges[0].cardStyle),
-            actionLabel: activeNudges[0].actionLabel ?? 'Ask Setthi AI',
-            onTap: () => SetthiAiSheet.show(
-              context,
-              initialPrompt:
-                  'Why is this happening: "${activeNudges[0].headline}" - ${activeNudges[0].body}? What should I do?',
-            ),
-          )
-        : DpcHeroCardItem(
-            title: 'Cashflow Overview',
-            subtitle: weeklyStats.isLive
-                ? '${BankTransaction.formatRupees(weeklyStats.spent)} spent • ${BankTransaction.formatRupees(weeklyStats.inflow)} inflow this week'
-                : '${BankTransaction.formatRupees(weeklyStats.spent)} spent • ${BankTransaction.formatRupees(weeklyStats.inflow)} inflow (${weeklyStats.periodLabel})',
-            badgeText: 'ANALYTICS',
-            icon: Icons.insights_rounded,
-            gradient: DpcColors.heroPastel2,
-            actionLabel: 'View Telemetry',
-            onTap: () => setState(() => _activeNavIndex = 2),
-          );
+    // Card 2: Cashflow Overview
+    final card2 = DpcHeroCardItem(
+      title: 'Cashflow Overview',
+      subtitle: weeklyStats.isLive
+          ? '${BankTransaction.formatRupees(weeklyStats.spent)} spent • ${BankTransaction.formatRupees(weeklyStats.inflow)} inflow this week'
+          : '${BankTransaction.formatRupees(weeklyStats.spent)} spent • ${BankTransaction.formatRupees(weeklyStats.inflow)} inflow (${weeklyStats.periodLabel})',
+      badgeText: 'ANALYTICS',
+      icon: Icons.insights_rounded,
+      gradient: DpcColors.heroPastel2,
+      actionLabel: 'View Telemetry',
+      onTap: () => setState(() => _activeNavIndex = 1),
+    );
 
-    // Card 3: Dynamic Nudge 2 or Fallback Smart Categorization
-    final card3 = activeNudges.length > 1
-        ? DpcHeroCardItem(
-            title: activeNudges[1].headline,
-            subtitle: activeNudges[1].body,
-            badgeText: activeNudges[1].badgeText,
-            icon: Icons.bolt_rounded,
-            gradient: resolveNudgeGradient(activeNudges[1].cardStyle),
-            actionLabel: activeNudges[1].actionLabel ?? 'Ask Setthi AI',
-            onTap: () => SetthiAiSheet.show(
-              context,
-              initialPrompt:
-                  'Regarding "${activeNudges[1].headline}": ${activeNudges[1].body}. Can you break this down for me?',
-            ),
-          )
-        : DpcHeroCardItem(
-            title: 'Smart Categorization',
-            subtitle:
-                'Automated UPI narration cleaner and merchant brand tagging',
-            badgeText: 'FINANCIAL AI',
-            icon: Icons.auto_awesome_rounded,
-            gradient: DpcColors.heroPastel3,
-            actionLabel: 'Timeline Feed',
-            onTap: () {
-              if (_scrollController.hasClients) {
-                _scrollController.animateTo(
-                  300,
-                  duration: const Duration(milliseconds: 400),
-                  curve: Curves.easeOutCubic,
-                );
-              }
-            },
+    // Card 3: Smart Categorization
+    final card3 = DpcHeroCardItem(
+      title: 'Smart Categorization',
+      subtitle: 'Automated UPI narration cleaner and merchant brand tagging',
+      badgeText: 'FINANCIAL AI',
+      icon: Icons.auto_awesome_rounded,
+      gradient: DpcColors.heroPastel3,
+      actionLabel: 'Timeline Feed',
+      onTap: () {
+        if (_scrollController.hasClients) {
+          _scrollController.animateTo(
+            300,
+            duration: const Duration(milliseconds: 400),
+            curve: Curves.easeOutCubic,
           );
+        }
+      },
+    );
 
     final card4 = DpcHeroCardItem(
       title: 'Security & Vault',
@@ -1107,7 +1299,7 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
       icon: Icons.lock_rounded,
       gradient: DpcColors.heroPastel4,
       actionLabel: 'Profile & Settings',
-      onTap: () => setState(() => _activeNavIndex = 1),
+      onTap: () => setState(() => _activeNavIndex = 4),
     );
 
     return [card1, card2, card3, card4];
@@ -1118,7 +1310,7 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
   Widget _buildHeroAggregate(
     double balance,
     bool hasActiveConsent, {
-    ({double spent, double inflow, String periodLabel, bool isLive})? weeklyStats,
+    WeeklyTelemetryStats? weeklyStats,
     bool isSyncing = false,
   }) {
     return Column(
@@ -1179,7 +1371,9 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
                     ? (weeklyStats.isLive
                         ? '${BankTransaction.formatRupees(weeklyStats.spent)} outflow this week'
                         : '${BankTransaction.formatRupees(weeklyStats.spent)} outflow (${weeklyStats.periodLabel})')
-                    : 'All accounts verified & synced',
+                    : (weeklyStats.isLive
+                        ? 'All accounts verified & synced'
+                        : 'Statement: ${weeklyStats.periodLabel}'),
                 style: const TextStyle(
                   color: DpcColors.textSecondary,
                   fontSize: 12,
@@ -1393,12 +1587,11 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
 
     final userEmail = user?.email?.trim();
     final profileEmail = (profile?['email'] as String?)?.trim();
-    final isAppleUser = user?.appMetadata['provider'] == 'apple';
     final email = (userEmail != null && userEmail.isNotEmpty)
         ? userEmail
         : ((profileEmail != null && profileEmail.isNotEmpty)
             ? profileEmail
-            : (isAppleUser ? 'Apple ID Account' : 'Member'));
+            : null);
 
     final hasActiveConsent = ref.watch(hasActiveConsentProvider);
     final activeConsentId = ref.watch(activeConsentIdProvider);
@@ -1407,7 +1600,7 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
 
     final avatarLetter = (fullName != 'Setthi Member' && fullName.isNotEmpty)
         ? fullName[0].toUpperCase()
-        : (email.isNotEmpty && email != 'Member' && email != 'Apple ID Account'
+        : (email != null && email.isNotEmpty
             ? email[0].toUpperCase()
             : 'S');
 
@@ -1479,16 +1672,18 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
                           ),
                         ],
                       ),
-                      const SizedBox(height: 3),
-                      Text(
-                        email,
-                        style: const TextStyle(
-                          color: DpcColors.textSecondary,
-                          fontSize: 13,
+                      if (email != null && email.isNotEmpty) ...[
+                        const SizedBox(height: 3),
+                        Text(
+                          email,
+                          style: const TextStyle(
+                            color: DpcColors.textSecondary,
+                            fontSize: 13,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
                         ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
+                      ],
                       const SizedBox(height: 6),
                       Wrap(
                         spacing: 6,
@@ -1563,6 +1758,133 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
                                 ),
                               ),
                             ),
+                          GestureDetector(
+                            onTap: () => _showEditNameDialog(
+                              context,
+                              ref,
+                              fullName,
+                              profile: profile,
+                            ),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 3,
+                              ),
+                              decoration: BoxDecoration(
+                                color: (profile?['income_type'] != null &&
+                                        (profile!['income_type'] as String).isNotEmpty)
+                                    ? DpcColors.surfaceTrack
+                                    : DpcColors.surfaceElevated,
+                                borderRadius: BorderRadius.circular(10),
+                                border: Border.all(
+                                  color: (profile?['income_type'] != null &&
+                                          (profile!['income_type'] as String).isNotEmpty)
+                                      ? DpcColors.surfaceBorder
+                                      : DpcColors.accentPositive.withValues(alpha: 0.4),
+                                  width: 1,
+                                ),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  if (profile?['income_type'] == null ||
+                                      (profile!['income_type'] as String).isEmpty) ...[
+                                    const Icon(
+                                      Icons.add_rounded,
+                                      size: 11,
+                                      color: DpcColors.accentPositive,
+                                    ),
+                                    const SizedBox(width: 3),
+                                  ],
+                                  Text(
+                                    (profile?['income_type'] != null &&
+                                            (profile!['income_type'] as String).isNotEmpty)
+                                        ? '${profile['income_type']}'
+                                        : 'Add Income Type',
+                                    style: TextStyle(
+                                      color: (profile?['income_type'] != null &&
+                                              (profile!['income_type'] as String).isNotEmpty)
+                                          ? DpcColors.accentPositive
+                                          : DpcColors.accentPositive,
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                          GestureDetector(
+                            onTap: () => _showEditNameDialog(
+                              context,
+                              ref,
+                              fullName,
+                              profile: profile,
+                            ),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 3,
+                              ),
+                              decoration: BoxDecoration(
+                                color: (profile?['expected_monthly_income'] != null &&
+                                        ((profile!['expected_monthly_income'] is num &&
+                                                profile['expected_monthly_income'] > 0) ||
+                                            (double.tryParse(profile['expected_monthly_income'].toString()) != null &&
+                                                double.parse(profile['expected_monthly_income'].toString()) > 0)))
+                                    ? DpcColors.surfaceTrack
+                                    : DpcColors.surfaceElevated,
+                                borderRadius: BorderRadius.circular(10),
+                                border: Border.all(
+                                  color: (profile?['expected_monthly_income'] != null &&
+                                          ((profile!['expected_monthly_income'] is num &&
+                                                  profile['expected_monthly_income'] > 0) ||
+                                              (double.tryParse(profile['expected_monthly_income'].toString()) != null &&
+                                                  double.parse(profile['expected_monthly_income'].toString()) > 0)))
+                                      ? DpcColors.surfaceBorder
+                                      : DpcColors.surfaceBorder,
+                                  width: 1,
+                                ),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  if (profile?['expected_monthly_income'] == null ||
+                                      ((profile!['expected_monthly_income'] is num &&
+                                              profile['expected_monthly_income'] <= 0) ||
+                                          (double.tryParse(profile['expected_monthly_income'].toString()) != null &&
+                                              double.parse(profile['expected_monthly_income'].toString()) <= 0))) ...[
+                                    const Icon(
+                                      Icons.add_rounded,
+                                      size: 11,
+                                      color: DpcColors.textSecondary,
+                                    ),
+                                    const SizedBox(width: 3),
+                                  ],
+                                  Text(
+                                    (profile?['expected_monthly_income'] != null &&
+                                            ((profile!['expected_monthly_income'] is num &&
+                                                    profile['expected_monthly_income'] > 0) ||
+                                                (double.tryParse(profile['expected_monthly_income'].toString()) != null &&
+                                                    double.parse(profile['expected_monthly_income'].toString()) > 0)))
+                                        ? 'Baseline: ${BankTransaction.formatRupees(profile['expected_monthly_income'] is num ? (profile['expected_monthly_income'] as num).toDouble() : double.parse(profile['expected_monthly_income'].toString()))}/mo'
+                                        : 'Add Baseline Income',
+                                    style: TextStyle(
+                                      color: (profile?['expected_monthly_income'] != null &&
+                                              ((profile!['expected_monthly_income'] is num &&
+                                                      profile['expected_monthly_income'] > 0) ||
+                                                  (double.tryParse(profile['expected_monthly_income'].toString()) != null &&
+                                                      double.parse(profile['expected_monthly_income'].toString()) > 0)))
+                                          ? DpcColors.textPrimary
+                                          : DpcColors.textSecondary,
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
                         ],
                       ),
                     ],
@@ -1815,6 +2137,13 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
               onPressed: () async {
                 ref.read(authBypassProvider.notifier).reset();
                 await ref.read(authServiceProvider).signOut();
+                ref.invalidate(currentUserProvider);
+                ref.invalidate(userProfileProvider);
+                ref.invalidate(cashflowRhythmProvider);
+                ref.invalidate(recurringCommitmentsProvider);
+                ref.invalidate(transactionFeedProvider);
+                ref.invalidate(telemetryMetricsProvider);
+                ref.invalidate(activeConsentIdProvider);
               },
               icon: const Icon(
                 Icons.logout_rounded,
@@ -1895,11 +2224,23 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
       } catch (_) {}
     }
 
+    double? initialMonthlyIncome;
+    final rawIncome = profile?['expected_monthly_income'];
+    if (rawIncome != null) {
+      if (rawIncome is num) {
+        initialMonthlyIncome = rawIncome.toDouble();
+      } else {
+        initialMonthlyIncome = double.tryParse(rawIncome.toString());
+      }
+    }
+
     await ProfileCompletionDialog.show(
       context,
       initialName: currentName == 'Setthi Member' ? null : currentName,
       initialDob: initialDob,
       initialGender: profile?['gender'] as String?,
+      initialIncomeType: profile?['income_type'] as String?,
+      initialMonthlyIncome: initialMonthlyIncome,
       isMandatory: false,
     );
   }
@@ -2300,34 +2641,71 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
       ]);
     }
 
+
+
+    final shortMonths = [
+      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+    ];
+
+    String formatTxnDate(DateTime dt) {
+      return '${dt.day} ${shortMonths[dt.month - 1]} ${dt.year}';
+    }
+
+    String formatSyncDate(DateTime dt) {
+      final now = DateTime.now();
+      final diff = now.difference(dt);
+      if (diff.inMinutes < 60) {
+        return diff.inMinutes <= 1 ? 'Just now' : '${diff.inMinutes}m ago';
+      } else if (diff.inHours < 24) {
+        return '${diff.inHours}h ago';
+      } else {
+        return '${dt.day} ${shortMonths[dt.month - 1]}';
+      }
+    }
+
     return SingleChildScrollView(
       physics: const BouncingScrollPhysics(),
       padding: const EdgeInsets.fromLTRB(18, 12, 18, 100),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Screen Title
+          // Screen Title with Temporal & Ingestion Grounding
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'TELEMETRY & ANALYTICS',
-                    style: DpcTypography.badgeTag,
-                  ),
-                  const SizedBox(height: 4),
-                  const Text(
-                    'Cash Flow Telemetry',
-                    style: TextStyle(
-                      color: DpcColors.textPrimary,
-                      fontSize: 24,
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: -0.5,
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'TELEMETRY & ANALYTICS',
+                      style: DpcTypography.badgeTag,
                     ),
-                  ),
-                ],
+                    const SizedBox(height: 4),
+                    const Text(
+                      'Cash Flow Telemetry',
+                      style: TextStyle(
+                        color: DpcColors.textPrimary,
+                        fontSize: 24,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: -0.5,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      weeklyStats.latestTxnTimestamp != null
+                          ? 'As of ${formatTxnDate(weeklyStats.latestTxnTimestamp!)}${weeklyStats.lastSyncedAt != null ? ' • Synced ${formatSyncDate(weeklyStats.lastSyncedAt!)}' : ''}'
+                          : 'Real-time financial telemetry',
+                      style: const TextStyle(
+                        color: DpcColors.textSecondary,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ],
+                ),
               ),
               Container(
                 padding: const EdgeInsets.symmetric(
@@ -2338,16 +2716,18 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    const Icon(
-                      Icons.insights_rounded,
+                    Icon(
+                      weeklyStats.isLive ? Icons.sensors_rounded : Icons.history_rounded,
                       size: 14,
-                      color: DpcColors.accentPositive,
+                      color: weeklyStats.isLive ? DpcColors.accentPositive : DpcColors.accentLevel,
                     ),
                     const SizedBox(width: 6),
                     Text(
-                      telemetryAsync.isLoading ? 'Calculating...' : 'Live Metrics',
-                      style: const TextStyle(
-                        color: DpcColors.accentPositive,
+                      telemetryAsync.isLoading
+                          ? 'Calculating...'
+                          : (weeklyStats.isLive ? 'Live Feed' : 'Statement Period'),
+                      style: TextStyle(
+                        color: weeklyStats.isLive ? DpcColors.accentPositive : DpcColors.accentLevel,
                         fontSize: 11,
                         fontWeight: FontWeight.w700,
                       ),
@@ -2491,7 +2871,7 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
               ),
             ],
           ),
-          const SizedBox(height: 18),
+          const SizedBox(height: 20),
 
           // 4. Liquid Volume Cards (3-Column Channel Breakdown)
           const Text(
@@ -2839,7 +3219,7 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
                 child: TextButton.icon(
                   key: const Key('error_state_go_home_button'),
                   onPressed: () {
-                    setState(() => _activeNavIndex = 0);
+                    setState(() => _activeNavIndex = 2);
                     ref
                         .read(transactionFeedProvider.notifier)
                         .dismissErrorAndGoHome();
@@ -3543,12 +3923,17 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
 
   /// Horizontal strip of 1-tap quick category presets when uncategorized
   Widget _buildQuickCategoryRow(BuildContext context, BankTransaction txn) {
-    const quickPresets = [
-      ('Food & Dining', '🍔', Color(0xFFFC8019)),
-      ('Groceries', '🛒', Color(0xFF10B981)),
-      ('Shopping', '🛍️', Color(0xFFA78BFA)),
-      ('Transport', '🚗', Color(0xFF00C8FF)),
-      ('Bills & Utilities', '⚡', Color(0xFFFBBF24)),
+    final quickPresets = [
+      if (txn.isCredit)
+        ('Income', Icons.account_balance_wallet_rounded, const Color(0xFF34D399)),
+      ('Food & Dining', Icons.restaurant_rounded, const Color(0xFFFC8019)),
+      ('Shopping & Lifestyle', Icons.shopping_bag_rounded, const Color(0xFFA78BFA)),
+      ('Travel & Commute', Icons.directions_car_rounded, const Color(0xFF00C8FF)),
+      ('Bills & Essentials', Icons.bolt_rounded, const Color(0xFFFBBF24)),
+      ('Investments & Transfers', Icons.trending_up_rounded, const Color(0xFF32D74B)),
+      if (!txn.isCredit)
+        ('Income', Icons.account_balance_wallet_rounded, const Color(0xFF34D399)),
+      ('Custom', Icons.tune_rounded, const Color(0xFFB8F5D8)),
     ];
 
     return Padding(
@@ -3561,6 +3946,11 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
               padding: const EdgeInsets.only(right: 6),
               child: InkWell(
                 onTap: () {
+                  if (preset.$1 == 'Custom') {
+                    Navigator.of(context).pop();
+                    _showCategoryPickerModal(context, txn);
+                    return;
+                  }
                   ref
                       .read(transactionFeedProvider.notifier)
                       .updateTransactionCategory(
@@ -3617,7 +4007,7 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Text(preset.$2, style: const TextStyle(fontSize: 11)),
+                      Icon(preset.$2, size: 12, color: preset.$3),
                       const SizedBox(width: 4),
                       Text(
                         preset.$1,
@@ -3730,79 +4120,39 @@ class _CategoryPickerSheetState extends State<_CategoryPickerSheet> {
 
   static const List<_CategoryPreset> _presets = [
     _CategoryPreset(
+      name: 'Custom',
+      icon: Icons.tune_rounded,
+      color: Color(0xFFB8F5D8),
+    ),
+    _CategoryPreset(
+      name: 'Income',
+      icon: Icons.account_balance_wallet_rounded,
+      color: Color(0xFF34D399),
+    ),
+    _CategoryPreset(
       name: 'Food & Dining',
       icon: Icons.restaurant_rounded,
       color: Color(0xFFFC8019),
     ),
     _CategoryPreset(
-      name: 'Groceries',
-      icon: Icons.shopping_cart_rounded,
-      color: Color(0xFF10B981),
-    ),
-    _CategoryPreset(
-      name: 'Shopping',
+      name: 'Shopping & Lifestyle',
       icon: Icons.shopping_bag_rounded,
       color: Color(0xFFA78BFA),
     ),
     _CategoryPreset(
-      name: 'Transport & Travel',
+      name: 'Travel & Commute',
       icon: Icons.directions_car_rounded,
       color: Color(0xFF00C8FF),
     ),
     _CategoryPreset(
-      name: 'Cafe & Coffee',
-      icon: Icons.local_cafe_rounded,
-      color: Color(0xFFD38D5F),
-    ),
-    _CategoryPreset(
-      name: 'Entertainment',
-      icon: Icons.movie_rounded,
-      color: Color(0xFFFF2D55),
-    ),
-    _CategoryPreset(
-      name: 'Bills & Utilities',
+      name: 'Bills & Essentials',
       icon: Icons.bolt_rounded,
       color: Color(0xFFFBBF24),
     ),
     _CategoryPreset(
-      name: 'Health & Fitness',
-      icon: Icons.fitness_center_rounded,
-      color: Color(0xFF30B0C7),
-    ),
-    _CategoryPreset(
-      name: 'Subscriptions & Tech',
-      icon: Icons.devices_rounded,
-      color: Color(0xFF5856D6),
-    ),
-    _CategoryPreset(
-      name: 'Salary & Income',
-      icon: Icons.account_balance_wallet_rounded,
-      color: Color(0xFF34D399),
-    ),
-    _CategoryPreset(
-      name: 'Transfers & UPI',
-      icon: Icons.swap_horiz_rounded,
-      color: Color(0xFF38BDF8),
-    ),
-    _CategoryPreset(
-      name: 'Personal Care',
-      icon: Icons.spa_rounded,
-      color: Color(0xFFFF6482),
-    ),
-    _CategoryPreset(
-      name: 'Education',
-      icon: Icons.school_rounded,
-      color: Color(0xFFFF9F0A),
-    ),
-    _CategoryPreset(
-      name: 'Investments',
+      name: 'Investments & Transfers',
       icon: Icons.trending_up_rounded,
       color: Color(0xFF32D74B),
-    ),
-    _CategoryPreset(
-      name: 'General / Other',
-      icon: Icons.label_outline_rounded,
-      color: Color(0xFF8E8E93),
     ),
   ];
 
@@ -3818,10 +4168,34 @@ class _CategoryPickerSheetState extends State<_CategoryPickerSheet> {
     super.dispose();
   }
 
+  bool _isCustomActive(String? category) {
+    if (category == null || category.trim().isEmpty) return false;
+    final catLower = category.trim().toLowerCase();
+    final isPreset = _presets
+        .where((p) => p.name != 'Custom')
+        .any((p) => p.name.toLowerCase() == catLower);
+    return !isPreset;
+  }
+
   void _selectCategory(String category) {
     HapticFeedback.lightImpact();
     widget.onCategorySelected(category);
     Navigator.of(context).pop();
+  }
+
+  void _showCustomCategoryDialog(BuildContext context) {
+    showDialog(
+      context: context,
+      useRootNavigator: true,
+      builder: (dialogCtx) => _CustomCategoryDialog(
+        merchantName: widget.txn.cleanMerchantName,
+        initialValue:
+            _isCustomActive(widget.txn.category) ? widget.txn.category : null,
+        onApply: (category) {
+          _selectCategory(category);
+        },
+      ),
+    );
   }
 
   @override
@@ -3835,6 +4209,7 @@ class _CategoryPickerSheetState extends State<_CategoryPickerSheet> {
 
     final exactMatch = _presets.any((p) => p.name.toLowerCase() == query);
     final showCustomOption = query.isNotEmpty && !exactMatch;
+    final isCustomActive = _isCustomActive(widget.txn.category);
 
     return Container(
       constraints: BoxConstraints(
@@ -3959,8 +4334,8 @@ class _CategoryPickerSheetState extends State<_CategoryPickerSheet> {
                                           : '- ${widget.txn.formattedAmount} Debited',
                                       style: TextStyle(
                                         color: widget.txn.isCredit
-                                            ? DpcColors.accentPositive
-                                            : DpcColors.accentNegative,
+                                          ? DpcColors.accentPositive
+                                          : DpcColors.accentNegative,
                                         fontSize: 10.5,
                                         fontWeight: FontWeight.w700,
                                         letterSpacing: -0.2,
@@ -4040,7 +4415,112 @@ class _CategoryPickerSheetState extends State<_CategoryPickerSheet> {
                 ),
               ),
 
-              const SizedBox(height: 14),
+              const SizedBox(height: 12),
+
+              // Dedicated "Custom" Category action bar (when search query is empty)
+              if (_searchQuery.isEmpty)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+                  child: InkWell(
+                    onTap: () => _showCustomCategoryDialog(context),
+                    borderRadius: BorderRadius.circular(12),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 11,
+                      ),
+                      decoration: BoxDecoration(
+                        color: isCustomActive
+                            ? const Color(0xFFB8F5D8).withValues(alpha: 0.12)
+                            : DpcColors.surfaceElevated,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: isCustomActive
+                              ? const Color(0xFFB8F5D8).withValues(alpha: 0.5)
+                              : DpcColors.surfaceBorder,
+                          width: 1,
+                        ),
+                      ),
+                      child: Row(
+                        children: [
+                          Container(
+                            width: 32,
+                            height: 32,
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFB8F5D8)
+                                  .withValues(alpha: 0.15),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: const Icon(
+                              Icons.tune_rounded,
+                              size: 16,
+                              color: Color(0xFFB8F5D8),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: [
+                                    const Text(
+                                      'Custom Category',
+                                      style: TextStyle(
+                                        color: Color(0xFFB8F5D8),
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                                    if (isCustomActive &&
+                                        widget.txn.category != null) ...[
+                                      const SizedBox(width: 6),
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 6,
+                                          vertical: 1.5,
+                                        ),
+                                        decoration: BoxDecoration(
+                                          color: const Color(0xFFB8F5D8)
+                                              .withValues(alpha: 0.2),
+                                          borderRadius:
+                                              BorderRadius.circular(4),
+                                        ),
+                                        child: Text(
+                                          widget.txn.category!,
+                                          style: const TextStyle(
+                                            color: Color(0xFFB8F5D8),
+                                            fontSize: 10,
+                                            fontWeight: FontWeight.w700,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ],
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  isCustomActive && widget.txn.category != null
+                                      ? 'Tap to edit or set another custom category'
+                                      : 'Customly add a unique category name',
+                                  style: const TextStyle(
+                                    color: DpcColors.textMuted,
+                                    fontSize: 11,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const Icon(
+                            Icons.add_circle_outline_rounded,
+                            size: 18,
+                            color: Color(0xFFB8F5D8),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
 
               // Categories List / Grid
               Flexible(
@@ -4130,11 +4610,20 @@ class _CategoryPickerSheetState extends State<_CategoryPickerSheet> {
                       ),
                       itemBuilder: (context, index) {
                         final preset = filteredPresets[index];
-                        final isCurrent = widget.txn.category?.toLowerCase() ==
-                            preset.name.toLowerCase();
+                        final isCustom = preset.name == 'Custom';
+                        final isCurrent = isCustom
+                            ? isCustomActive
+                            : widget.txn.category?.toLowerCase() ==
+                                preset.name.toLowerCase();
 
                         return InkWell(
-                          onTap: () => _selectCategory(preset.name),
+                          onTap: () {
+                            if (isCustom) {
+                              _showCustomCategoryDialog(context);
+                            } else {
+                              _selectCategory(preset.name);
+                            }
+                          },
                           borderRadius: BorderRadius.circular(12),
                           child: Container(
                             padding: const EdgeInsets.symmetric(
@@ -4171,7 +4660,11 @@ class _CategoryPickerSheetState extends State<_CategoryPickerSheet> {
                                 const SizedBox(width: 8),
                                 Expanded(
                                   child: Text(
-                                    preset.name,
+                                    isCustom &&
+                                            isCustomActive &&
+                                            widget.txn.category != null
+                                        ? 'Custom (${widget.txn.category})'
+                                        : preset.name,
                                     style: TextStyle(
                                       color: isCurrent
                                           ? preset.color
@@ -4204,6 +4697,303 @@ class _CategoryPickerSheetState extends State<_CategoryPickerSheet> {
               ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Custom Category Dialog allowing user to customly add or edit a category
+class _CustomCategoryDialog extends StatefulWidget {
+  final String? initialValue;
+  final String merchantName;
+  final void Function(String category) onApply;
+
+  const _CustomCategoryDialog({
+    this.initialValue,
+    required this.merchantName,
+    required this.onApply,
+  });
+
+  @override
+  State<_CustomCategoryDialog> createState() => _CustomCategoryDialogState();
+}
+
+class _CustomCategoryDialogState extends State<_CustomCategoryDialog> {
+  late final TextEditingController _controller;
+  bool _canSave = false;
+
+  static const List<String> _popularSuggestions = [
+    'Pet Care',
+    'Fitness & Gym',
+    'Freelance',
+    'Gifts & Donations',
+    'Rent & Maintenance',
+    'Taxes & Legal',
+    'Travel & Hotel',
+    'Home Improvement',
+  ];
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController(text: widget.initialValue ?? '');
+    _canSave = _controller.text.trim().isNotEmpty;
+    _controller.addListener(() {
+      final isValid = _controller.text.trim().isNotEmpty;
+      if (isValid != _canSave) {
+        setState(() => _canSave = isValid);
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    final text = _controller.text.trim();
+    if (text.isEmpty) return;
+    HapticFeedback.lightImpact();
+    Navigator.of(context).pop();
+    widget.onApply(text);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      backgroundColor: DpcColors.surfaceDark,
+      insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(24),
+        side: const BorderSide(color: DpcColors.surfaceBorder, width: 1),
+      ),
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Header
+            Row(
+              children: [
+                Container(
+                  width: 38,
+                  height: 38,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFB8F5D8).withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(
+                      color: const Color(0xFFB8F5D8).withValues(alpha: 0.3),
+                      width: 1,
+                    ),
+                  ),
+                  child: const Icon(
+                    Icons.tune_rounded,
+                    size: 20,
+                    color: Color(0xFFB8F5D8),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                const Expanded(
+                  child: Text(
+                    'Custom Category',
+                    style: TextStyle(
+                      color: DpcColors.textPrimary,
+                      fontSize: 17,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: -0.3,
+                    ),
+                  ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.close_rounded, size: 20),
+                  color: DpcColors.textMuted,
+                  onPressed: () => Navigator.of(context).pop(),
+                  splashRadius: 20,
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Text(
+              'Set a personalized category for "${widget.merchantName}"',
+              style: const TextStyle(
+                color: DpcColors.textSecondary,
+                fontSize: 12.5,
+              ),
+            ),
+            const SizedBox(height: 18),
+
+            // Text Input
+            Container(
+              decoration: BoxDecoration(
+                color: DpcColors.surfaceElevated,
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(
+                  color: _canSave
+                      ? const Color(0xFFB8F5D8).withValues(alpha: 0.5)
+                      : DpcColors.surfaceBorder,
+                  width: 1,
+                ),
+              ),
+              padding: const EdgeInsets.symmetric(horizontal: 14),
+              child: Row(
+                children: [
+                  const Icon(
+                    Icons.label_outline_rounded,
+                    color: DpcColors.textMuted,
+                    size: 18,
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: TextField(
+                      controller: _controller,
+                      autofocus: true,
+                      textCapitalization: TextCapitalization.words,
+                      onSubmitted: (_) => _submit(),
+                      style: const TextStyle(
+                        color: DpcColors.textPrimary,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                      ),
+                      cursorColor: const Color(0xFFB8F5D8),
+                      decoration: const InputDecoration(
+                        hintText: 'Enter category name...',
+                        hintStyle: TextStyle(
+                          color: DpcColors.textMuted,
+                          fontSize: 13,
+                        ),
+                        border: InputBorder.none,
+                      ),
+                    ),
+                  ),
+                  if (_controller.text.isNotEmpty)
+                    IconButton(
+                      icon: const Icon(Icons.clear_rounded, size: 16),
+                      color: DpcColors.textMuted,
+                      onPressed: () {
+                        _controller.clear();
+                      },
+                    ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+
+            // Suggestions
+            const Text(
+              'SUGGESTIONS',
+              style: TextStyle(
+                color: DpcColors.textMuted,
+                fontSize: 10.5,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 0.8,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: _popularSuggestions.map((suggestion) {
+                final isSelected = _controller.text.trim().toLowerCase() ==
+                    suggestion.toLowerCase();
+                return InkWell(
+                  onTap: () {
+                    HapticFeedback.selectionClick();
+                    _controller.text = suggestion;
+                    _controller.selection = TextSelection.fromPosition(
+                      TextPosition(offset: suggestion.length),
+                    );
+                  },
+                  borderRadius: BorderRadius.circular(20),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 5,
+                    ),
+                    decoration: BoxDecoration(
+                      color: isSelected
+                          ? const Color(0xFFB8F5D8).withValues(alpha: 0.15)
+                          : DpcColors.surfaceElevated,
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(
+                        color: isSelected
+                            ? const Color(0xFFB8F5D8).withValues(alpha: 0.5)
+                            : DpcColors.surfaceBorder,
+                        width: 0.8,
+                      ),
+                    ),
+                    child: Text(
+                      suggestion,
+                      style: TextStyle(
+                        color: isSelected
+                            ? const Color(0xFFB8F5D8)
+                            : DpcColors.textSecondary,
+                        fontSize: 11.5,
+                        fontWeight:
+                            isSelected ? FontWeight.w700 : FontWeight.w500,
+                      ),
+                    ),
+                  ),
+                );
+              }).toList(),
+            ),
+            const SizedBox(height: 22),
+
+            // Action Buttons
+            Row(
+              children: [
+                Expanded(
+                  child: TextButton(
+                    onPressed: () => Navigator.of(context).pop(),
+                    style: TextButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 13),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                    child: const Text(
+                      'Cancel',
+                      style: TextStyle(
+                        color: DpcColors.textSecondary,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  flex: 2,
+                  child: ElevatedButton(
+                    onPressed: _canSave ? _submit : null,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFFB8F5D8),
+                      disabledBackgroundColor:
+                          const Color(0xFFB8F5D8).withValues(alpha: 0.2),
+                      padding: const EdgeInsets.symmetric(vertical: 13),
+                      elevation: 0,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                    child: Text(
+                      'Save Category',
+                      style: TextStyle(
+                        color: _canSave
+                            ? Colors.black
+                            : Colors.white.withValues(alpha: 0.3),
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
         ),
       ),
     );

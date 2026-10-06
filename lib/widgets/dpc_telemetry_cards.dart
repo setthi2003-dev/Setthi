@@ -1,5 +1,7 @@
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import '../config/dpc_tokens.dart';
+import '../models/transaction_model.dart';
 import 'dpc_gauges.dart';
 import 'dpc_segmented_bar.dart';
 
@@ -753,5 +755,389 @@ class DpcPhaseMultiGaugeRow extends StatelessWidget {
         }).toList(),
       ),
     );
+  }
+}
+
+/// Category spend item representing aggregated category metrics
+class CategorySpendItem {
+  final String category;
+  final double amount;
+  final int count;
+  final double percentage;
+  final Color color;
+  final IconData icon;
+
+  const CategorySpendItem({
+    required this.category,
+    required this.amount,
+    required this.count,
+    required this.percentage,
+    required this.color,
+    required this.icon,
+  });
+}
+
+/// Helper returning cohesive, desaturated matte editorial tones for categories
+/// Purged of AI-slop neon saturation in favor of balanced Scandinavian/architectural harmony
+Color getCategorySpendColor(String category) {
+  final cat = category.toLowerCase().trim();
+  if (cat.contains('food') || cat.contains('dining') || cat.contains('cafe') || cat.contains('grocer')) {
+    return const Color(0xFFC88A58); // Matte Terracotta Clay
+  } else if (cat.contains('shop') || cat.contains('lifestyle') || cat.contains('entertainment')) {
+    return const Color(0xFF988BA2); // Dusty Heather / Slate Mauve
+  } else if (cat.contains('travel') || cat.contains('commute') || cat.contains('transport')) {
+    return const Color(0xFF68879B); // Nordic Steel Blue
+  } else if (cat.contains('bill') || cat.contains('essential') || cat.contains('utilit')) {
+    return const Color(0xFFBAA174); // Warm Flax / Muted Ochre
+  } else if (cat.contains('invest') || cat.contains('transfer') || cat.contains('upi')) {
+    return const Color(0xFF749882); // Soft Sage / Eucalypt
+  } else if (cat.contains('income') || cat.contains('salary')) {
+    return const Color(0xFF82A38E); // Quiet Willow / Muted Mint
+  } else if (cat.contains('uncategorized')) {
+    return const Color(0xFF6E7681); // Muted Zinc Graphite
+  }
+  return const Color(0xFF949BA3); // Titanium Nickel for custom categories
+}
+
+/// Helper returning standard icons for categories
+IconData getCategorySpendIcon(String category) {
+  final cat = category.toLowerCase().trim();
+  if (cat.contains('food') || cat.contains('dining') || cat.contains('cafe') || cat.contains('grocer')) {
+    return Icons.restaurant_rounded;
+  } else if (cat.contains('shop') || cat.contains('lifestyle') || cat.contains('entertainment')) {
+    return Icons.shopping_bag_rounded;
+  } else if (cat.contains('travel') || cat.contains('commute') || cat.contains('transport')) {
+    return Icons.directions_car_rounded;
+  } else if (cat.contains('bill') || cat.contains('essential') || cat.contains('utilit')) {
+    return Icons.bolt_rounded;
+  } else if (cat.contains('invest') || cat.contains('transfer') || cat.contains('upi')) {
+    return Icons.trending_up_rounded;
+  } else if (cat.contains('income') || cat.contains('salary')) {
+    return Icons.account_balance_wallet_rounded;
+  } else if (cat.contains('uncategorized')) {
+    return Icons.label_off_rounded;
+  }
+  return Icons.tune_rounded;
+}
+
+/// 6. Premium OLED Donut Chart & Category Spend Breakdown Card
+class DpcCategorySpendCard extends StatelessWidget {
+  final List<CategorySpendItem> items;
+  final double totalSpent;
+  final String periodLabel;
+  final bool showBackground;
+
+  const DpcCategorySpendCard({
+    super.key,
+    required this.items,
+    required this.totalSpent,
+    required this.periodLabel,
+    this.showBackground = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: showBackground ? DpcDecorations.cardBase(radius: 20) : null,
+      padding: showBackground
+          ? const EdgeInsets.all(20)
+          : EdgeInsets.zero,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Header Row: Precision Monochrome & Understated Pill
+          Row(
+            children: [
+              Container(
+                width: 32,
+                height: 32,
+                decoration: BoxDecoration(
+                  color: DpcColors.surfaceDark,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(
+                    color: DpcColors.surfaceBorder,
+                    width: 1,
+                  ),
+                ),
+                child: const Icon(
+                  Icons.pie_chart_outline_rounded,
+                  color: DpcColors.textPrimary,
+                  size: 17,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'SPEND BY CATEGORY',
+                      style: DpcTypography.badgeTag,
+                    ),
+                    const SizedBox(height: 2),
+                    const Text(
+                      'Category Outflows',
+                      style: TextStyle(
+                        color: DpcColors.textPrimary,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: -0.3,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(
+                  color: DpcColors.surfaceDark,
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(
+                    color: DpcColors.surfaceBorder,
+                    width: 1,
+                  ),
+                ),
+                child: Text(
+                  totalSpent > 0 ? BankTransaction.formatRupees(totalSpent, showDecimals: false) : '₹0',
+                  style: const TextStyle(
+                    color: DpcColors.textSecondary,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+
+          // Donut Ring Chart Centerpiece (Generous, balanced precision gauge)
+          Center(
+            child: SizedBox(
+              width: 164,
+              height: 164,
+              child: Stack(
+                alignment: Alignment.center,
+                children: [
+                  CustomPaint(
+                    size: const Size(156, 156),
+                    painter: _CategoryDonutPainter(
+                      items: items,
+                      totalSpent: totalSpent,
+                    ),
+                  ),
+                  Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(
+                        constraints: const BoxConstraints(maxWidth: 114),
+                        child: FittedBox(
+                          fit: BoxFit.scaleDown,
+                          child: Text(
+                            totalSpent > 0
+                                ? BankTransaction.formatRupees(totalSpent, showDecimals: false)
+                                : '₹0',
+                            style: const TextStyle(
+                              color: DpcColors.textPrimary,
+                              fontSize: 18,
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: -0.5,
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        items.isNotEmpty
+                            ? '${items.length} categories'
+                            : periodLabel,
+                        style: const TextStyle(
+                          color: DpcColors.textSecondary,
+                          fontSize: 10.5,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 14),
+
+          // Category Breakdown List
+          if (items.isEmpty || totalSpent <= 0) ...[
+            Center(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                child: Text(
+                  'No category outflows recorded for $periodLabel.',
+                  style: const TextStyle(
+                    color: DpcColors.textMuted,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ),
+            ),
+          ] else ...[
+            ListView.separated(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              padding: EdgeInsets.zero,
+              itemCount: items.length,
+              separatorBuilder: (context, index) => const SizedBox(height: 12),
+              itemBuilder: (context, index) {
+                final item = items[index];
+                final fraction = totalSpent > 0 ? (item.amount / totalSpent).clamp(0.0, 1.0) : 0.0;
+
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Container(
+                          width: 28,
+                          height: 28,
+                          decoration: BoxDecoration(
+                            color: DpcColors.surfaceDark,
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(
+                              color: DpcColors.surfaceBorder,
+                              width: 1,
+                            ),
+                          ),
+                          child: Icon(
+                            item.icon,
+                            size: 14,
+                            color: item.color,
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            item.category,
+                            style: const TextStyle(
+                              color: DpcColors.textPrimary,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        Text(
+                          BankTransaction.formatRupees(item.amount),
+                          style: const TextStyle(
+                            color: DpcColors.textPrimary,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+
+                    // Progress Bar
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(2),
+                      child: Container(
+                        height: 4,
+                        width: double.infinity,
+                        color: DpcColors.surfaceBorder,
+                        alignment: Alignment.centerLeft,
+                        child: FractionallySizedBox(
+                          widthFactor: fraction.clamp(0.01, 1.0),
+                          child: Container(
+                            decoration: BoxDecoration(
+                              color: item.color,
+                              borderRadius: BorderRadius.circular(2),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+
+                    // Subtitle: Transaction Count & Percentage
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(
+                          '${item.count} ${item.count == 1 ? 'transaction' : 'transactions'}',
+                          style: const TextStyle(
+                            color: DpcColors.textMuted,
+                            fontSize: 10.5,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                        Text(
+                          '${item.percentage.toStringAsFixed(1)}%',
+                          style: TextStyle(
+                            color: item.color,
+                            fontSize: 10.5,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                );
+              },
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// CustomPainter rendering a segmented OLED donut ring chart
+class _CategoryDonutPainter extends CustomPainter {
+  final List<CategorySpendItem> items;
+  final double totalSpent;
+
+  _CategoryDonutPainter({
+    required this.items,
+    required this.totalSpent,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final center = Offset(size.width / 2, size.height / 2);
+    final radius = (size.width - 14) / 2;
+
+    // Draw background track ring
+    final trackPaint = Paint()
+      ..color = DpcColors.surfaceBorder
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 11.0;
+
+    canvas.drawCircle(center, radius, trackPaint);
+
+    if (items.isEmpty || totalSpent <= 0) return;
+
+    final rect = Rect.fromCircle(center: center, radius: radius);
+    double startAngle = -math.pi / 2; // Start from 12 o'clock
+    const gapAngle = 0.04; // Crisp precision hairline gap between segments
+
+    for (final item in items) {
+      final sweepAngle = (item.amount / totalSpent) * (2 * math.pi);
+      if (sweepAngle <= 0.005) continue;
+
+      final actualSweep = items.length > 1 ? math.max(0.01, sweepAngle - gapAngle) : sweepAngle;
+      final paint = Paint()
+        ..color = item.color
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 11.0
+        ..strokeCap = StrokeCap.butt;
+
+      canvas.drawArc(rect, startAngle + (gapAngle / 2), actualSweep, false, paint);
+      startAngle += sweepAngle;
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _CategoryDonutPainter oldDelegate) {
+    return oldDelegate.totalSpent != totalSpent || oldDelegate.items != items;
   }
 }

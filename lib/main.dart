@@ -2,6 +2,8 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:rive/rive.dart';
+import 'config/dpc_tokens.dart';
 import 'config/setu_config.dart';
 import 'config/supabase_config.dart';
 import 'firebase_options.dart';
@@ -12,6 +14,13 @@ import 'screens/transaction_feed_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Initialize Rive Native C++ runtime
+  try {
+    await RiveNative.init();
+  } catch (e) {
+    debugPrint('[Rive] Initialization info/warning: $e');
+  }
 
   // Initialize Firebase with platform-specific options
   try {
@@ -65,11 +74,11 @@ class SetthiApp extends ConsumerWidget {
         brightness: Brightness.dark,
         scaffoldBackgroundColor: const Color(0xFF000000),
         colorScheme: const ColorScheme.dark(
-          primary: Color(0xFF34D399), // DPC Accent Positive
-          secondary: Color(0xFF38BDF8), // DPC Accent Primary / Currency
-          surface: Color(0xFF0D0D11), // DPC Surface Dark
-          error: Color(0xFFF43F5E), // DPC Accent Negative
-          onPrimary: Color(0xFF121214),
+          primary: DpcColors.accentPositive,
+          secondary: DpcColors.accentPrimary,
+          surface: DpcColors.surfaceDark,
+          error: DpcColors.accentNegative,
+          onPrimary: DpcColors.textContrast,
           onSecondary: Colors.white,
           onSurface: Colors.white,
         ),

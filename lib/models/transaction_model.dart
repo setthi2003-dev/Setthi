@@ -25,6 +25,7 @@ class BankTransaction {
   final double amount;
   final double currentBalance;
   final DateTime transactionTimestamp;
+  final DateTime? createdAt;
   final String narration;
   final String? category;
   final String? precomputedMerchantName;
@@ -38,6 +39,7 @@ class BankTransaction {
     required this.amount,
     required this.currentBalance,
     required this.transactionTimestamp,
+    this.createdAt,
     required this.narration,
     this.category,
     this.precomputedMerchantName,
@@ -186,10 +188,13 @@ class BankTransaction {
   }
 
   /// Formats any double value into Indian numbering format: e.g. 125000 -> "₹1,25,000"
-  static String formatRupees(double val) {
+  static String formatRupees(double val, {bool showDecimals = true}) {
     final isNegative = val < 0;
     final absVal = val.abs();
-    final rounded = absVal.toStringAsFixed(absVal.truncateToDouble() == absVal ? 0 : 2);
+    final hasFraction = absVal.truncateToDouble() != absVal;
+    final rounded = (showDecimals && hasFraction)
+        ? absVal.toStringAsFixed(2)
+        : absVal.round().toString();
     final parts = rounded.split('.');
     final intPart = parts[0];
     final decPart = parts.length > 1 ? '.${parts[1]}' : '';
@@ -243,36 +248,37 @@ class BankTransaction {
     return Icons.arrow_upward_rounded;
   }
 
-  /// Merchant brand/category accent color
+  /// Merchant brand/category accent color in cohesive matte editorial tones
   Color get accentColor {
     final lower = cleanMerchantName.toLowerCase();
-    if (lower.contains('swiggy')) return const Color(0xFFFC8019); // Swiggy Orange
-    if (lower.contains('zomato')) return const Color(0xFFE23744); // Zomato Red
-    if (lower.contains('zepto')) return const Color(0xFF8B5CF6); // Zepto Purple
-    if (lower.contains('blinkit')) return const Color(0xFFF8CB46); // Blinkit Yellow
-    if (lower.contains('spotify')) return const Color(0xFF1DB954); // Spotify Green
-    if (lower.contains('netflix')) return const Color(0xFFE50914); // Netflix Red
-    if (lower.contains('uber')) return const Color(0xFF00C8FF); // Uber Cyan
-    if (lower.contains('rapido')) return const Color(0xFFFFC107); // Rapido Amber
-    if (lower.contains('starbucks') || lower.contains('coffee')) return const Color(0xFF00704A);
-    if (lower.contains('splitwise')) return const Color(0xFF5BC5A7); // Splitwise Teal
-    if (lower.contains('salary') || lower.contains('stipend')) return const Color(0xFF00FFA3); // Neon Mint
+    if (lower.contains('swiggy')) return const Color(0xFFC88A58); // Matte Terracotta
+    if (lower.contains('zomato')) return const Color(0xFFD47367); // Muted Coral Rose
+    if (lower.contains('zepto')) return const Color(0xFF988BA2); // Dusty Heather
+    if (lower.contains('blinkit')) return const Color(0xFFBAA174); // Warm Flax
+    if (lower.contains('spotify')) return const Color(0xFF749882); // Soft Sage
+    if (lower.contains('netflix')) return const Color(0xFFD47367); // Muted Rose
+    if (lower.contains('uber')) return const Color(0xFF68879B); // Nordic Steel Blue
+    if (lower.contains('rapido')) return const Color(0xFFBAA174); // Warm Flax
+    if (lower.contains('starbucks') || lower.contains('coffee')) return const Color(0xFF749882);
+    if (lower.contains('splitwise')) return const Color(0xFF82A38E); // Quiet Willow
+    if (lower.contains('salary') || lower.contains('stipend')) return const Color(0xFF82A38E); // Calm Mint
 
-    // Category-based color fallback
+    // Category-based color fallback in balanced Scandinavian tones
     final cat = (category ?? '').toLowerCase();
-    if (cat.contains('food') || cat.contains('dining')) return const Color(0xFFFC8019);
-    if (cat.contains('grocer')) return const Color(0xFF10B981);
-    if (cat.contains('transport') || cat.contains('travel')) return const Color(0xFF00C8FF);
-    if (cat.contains('shop')) return const Color(0xFFA78BFA);
-    if (cat.contains('entertain')) return const Color(0xFFE50914);
-    if (cat.contains('cafe') || cat.contains('coffee')) return const Color(0xFF00704A);
-    if (cat.contains('fitness') || cat.contains('health')) return const Color(0xFF34D399);
-    if (cat.contains('bill') || cat.contains('utilit')) return const Color(0xFFFBBF24);
-    if (cat.contains('subscript') || cat.contains('tech')) return const Color(0xFF818CF8);
-    if (cat.contains('income') || cat.contains('salary')) return const Color(0xFF00FFA3);
-    if (cat.contains('transfer')) return const Color(0xFF38BDF8);
+    if (cat.contains('food') || cat.contains('dining') || cat.contains('cafe') || cat.contains('coffee')) {
+      return const Color(0xFFC88A58); // Matte Terracotta Clay
+    }
+    if (cat.contains('grocer')) return const Color(0xFF749882); // Soft Sage
+    if (cat.contains('transport') || cat.contains('travel')) return const Color(0xFF68879B); // Nordic Steel Blue
+    if (cat.contains('shop') || cat.contains('lifestyle')) return const Color(0xFF988BA2); // Dusty Heather
+    if (cat.contains('entertain')) return const Color(0xFF988BA2); // Muted Heather
+    if (cat.contains('fitness') || cat.contains('health')) return const Color(0xFF82A38E); // Quiet Willow
+    if (cat.contains('bill') || cat.contains('utilit')) return const Color(0xFFBAA174); // Warm Flax
+    if (cat.contains('subscript') || cat.contains('tech')) return const Color(0xFF68879B); // Steel Blue
+    if (cat.contains('income') || cat.contains('salary')) return const Color(0xFF82A38E); // Calm Mint
+    if (cat.contains('transfer') || cat.contains('upi')) return const Color(0xFF749882); // Soft Sage
 
-    return isCredit ? const Color(0xFF00FFA3) : const Color(0xFFA78BFA);
+    return isCredit ? const Color(0xFF82A38E) : const Color(0xFF988BA2);
   }
 
   static double _parseDouble(dynamic val) {
@@ -350,6 +356,7 @@ class BankTransaction {
 
     final parsedSpendTier = json['spend_tier'] ?? json['spendTier'];
     final parsedIsRecurring = json['is_recurring'] ?? json['isRecurring'];
+    final rawCreatedAt = json['created_at'] ?? json['createdAt'];
 
     return BankTransaction(
       txnId: rawTxnId,
@@ -358,6 +365,7 @@ class BankTransaction {
       amount: _parseDouble(rawAmount),
       currentBalance: balance,
       transactionTimestamp: _parseDateTime(rawTime),
+      createdAt: rawCreatedAt != null ? _parseDateTime(rawCreatedAt) : null,
       narration: rawNarration,
       category: finalCategory,
       precomputedMerchantName: finalCleanName,
@@ -374,6 +382,7 @@ class BankTransaction {
       'amount': amount,
       'currentBalance': currentBalance,
       'transactionTimestamp': transactionTimestamp.toIso8601String(),
+      if (createdAt != null) 'created_at': createdAt!.toIso8601String(),
       'narration': narration,
       if (category != null) 'category': category,
       'clean_merchant_name': cleanMerchantName,
@@ -389,6 +398,7 @@ class BankTransaction {
     double? amount,
     double? currentBalance,
     DateTime? transactionTimestamp,
+    DateTime? createdAt,
     String? narration,
     String? category,
     String? precomputedMerchantName,
@@ -402,6 +412,7 @@ class BankTransaction {
       amount: amount ?? this.amount,
       currentBalance: currentBalance ?? this.currentBalance,
       transactionTimestamp: transactionTimestamp ?? this.transactionTimestamp,
+      createdAt: createdAt ?? this.createdAt,
       narration: narration ?? this.narration,
       category: category ?? this.category,
       precomputedMerchantName: precomputedMerchantName ?? this.precomputedMerchantName,

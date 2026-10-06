@@ -1,7 +1,6 @@
 import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../config/supabase_config.dart';
-import '../models/ai_nudge_model.dart';
 import '../models/chat_message_model.dart';
 import '../models/merchant_category_model.dart';
 import '../models/transaction_model.dart';
@@ -48,6 +47,8 @@ class SupabaseDbService {
     int? age,
     String? gender,
     DateTime? dateOfBirth,
+    String? incomeType,
+    double? expectedMonthlyIncome,
   }) async {
     final client = _effectiveClient;
     if (client == null) return;
@@ -85,6 +86,12 @@ class SupabaseDbService {
       }
       if (gender != null && gender.isNotEmpty) {
         payload['gender'] = gender.trim();
+      }
+      if (incomeType != null) {
+        payload['income_type'] = incomeType.trim();
+      }
+      if (expectedMonthlyIncome != null) {
+        payload['expected_monthly_income'] = expectedMonthlyIncome;
       }
 
       await client.from('profiles').upsert(payload);
@@ -366,7 +373,8 @@ class SupabaseDbService {
           .from('bank_transactions')
           .select()
           .eq('user_id', uid)
-          .order('transaction_timestamp', ascending: false);
+          .order('transaction_timestamp', ascending: false)
+          .order('created_at', ascending: false);
 
       if (limit != null) {
         final start = offset ?? 0;
@@ -387,9 +395,12 @@ class SupabaseDbService {
                 row['transaction_timestamp']?.toString() ?? '',
               ) ??
               DateTime.now(),
+          createdAt: DateTime.tryParse(row['created_at']?.toString() ?? ''),
           narration: row['narration']?.toString() ?? '',
           category: row['category']?.toString(),
           precomputedMerchantName: row['clean_merchant_name']?.toString(),
+          spendTier: row['spend_tier']?.toString(),
+          isRecurring: row['is_recurring'] == true || row['is_recurring'] == 'true',
         );
       }).toList();
     } catch (e) {
@@ -677,52 +688,30 @@ class SupabaseDbService {
     }
   }
 
-  // ===========================================================================
-  // 6. AI NUDGES & DETERMINISTIC TELEMETRY
-  // ===========================================================================
-
-  /// Fetches active (undismissed) AI proactive nudges for the carousel
-  Future<List<AiNudge>> fetchActiveNudges() async {
-    final client = _effectiveClient;
-    final uid = currentUserId;
-    if (client == null || uid == null) return [];
-
-    try {
-      final List<dynamic> rows = await client
-          .from('ai_nudges')
-          .select('*')
-          .eq('user_id', uid)
-          .eq('is_dismissed', false)
-          .order('created_at', ascending: false)
-          .limit(10);
-
-      return rows
-          .map((row) => AiNudge.fromJson(row as Map<String, dynamic>))
-          .toList();
-    } catch (e) {
-      debugPrint('[Supabase DB] Error fetching active nudges: $e');
-      return [];
-    }
-  }
-
-  /// Dismisses an AI nudge
-  Future<bool> dismissNudge(String nudgeId) async {
+  /// Deletes all chat messages for the current authenticated user from the backend database
+  Future<bool> deleteChatHistory() async {
     final client = _effectiveClient;
     final uid = currentUserId;
     if (client == null || uid == null) return false;
 
     try {
       await client
-          .from('ai_nudges')
-          .update({'is_dismissed': true})
-          .eq('id', nudgeId)
+          .from('chat_messages')
+          .delete()
           .eq('user_id', uid);
       return true;
+    } on PostgrestException catch (e) {
+      debugPrint('[Supabase DB] Error deleting chat history: ${e.message}');
+      return false;
     } catch (e) {
-      debugPrint('[Supabase DB] Error dismissing nudge $nudgeId: $e');
+      debugPrint('[Supabase DB] Error deleting chat history: $e');
       return false;
     }
   }
+
+  // ===========================================================================
+  // 6. DETERMINISTIC TELEMETRY
+  // ===========================================================================
 
   /// Fetches real telemetry aggregations from the deterministic RPC get_telemetry_metrics
   Future<Map<String, dynamic>?> fetchTelemetryMetrics({String period = 'all'}) async {
@@ -747,6 +736,112 @@ class SupabaseDbService {
     } catch (e) {
       debugPrint('[Supabase DB] Error fetching telemetry metrics for $period: $e');
       return null;
+    }
+  }
+
+  // ===========================================================================
+  // 7. CASHFLOW RHYTHM & RECURRING COMMITMENTS
+  // ===========================================================================
+
+  /// Fetches real-time financial rhythm (Safe-to-spend today/week, upcoming bills, runway)
+  Future<Map<String, dynamic>?> fetchCashflowRhythm([String? userId]) async {
+    final client = _effectiveClient;
+    final uid = userId ?? currentUserId;
+    if (client == null || uid == null) return null;
+
+    try {
+      final res = await client.rpc(
+        'get_cashflow_rhythm',
+        params: {'p_user_id': uid},
+      );
+      if (res is Map<String, dynamic>) {
+        return res;
+      } else if (res is Map) {
+        return Map<String, dynamic>.from(res);
+      }
+      return null;
+    } catch (e) {
+      debugPrint('[Supabase DB] Error fetching cashflow rhythm: $e');
+      return null;
+    }
+  }
+
+  /// Fetches the user's recurring commitments (subscriptions, rent, bills)
+  Future<List<Map<String, dynamic>>> fetchRecurringCommitments([String? userId]) async {
+    final client = _effectiveClient;
+    final uid = userId ?? currentUserId;
+    if (client == null || uid == null) return [];
+
+    try {
+      final res = await client
+          .from('user_recurring_commitments')
+          .select()
+          .eq('user_id', uid)
+          .order('typical_due_day', ascending: true);
+      return List<Map<String, dynamic>>.from(res);
+    } catch (e) {
+      debugPrint('[Supabase DB] Error fetching recurring commitments: $e');
+      return [];
+    }
+  }
+
+  /// Toggles active status of a recurring commitment (exclude or re-include in rhythm calculations)
+  Future<void> toggleRecurringCommitment({
+    required String commitmentId,
+    required bool isActive,
+    String? userId,
+  }) async {
+    final client = _effectiveClient;
+    final uid = userId ?? currentUserId;
+    if (client == null || uid == null) return;
+
+    try {
+      await client
+          .from('user_recurring_commitments')
+          .update({'is_active': isActive, 'updated_at': DateTime.now().toUtc().toIso8601String()})
+          .eq('id', commitmentId)
+          .eq('user_id', uid);
+      debugPrint('[Supabase DB] Commitment $commitmentId updated isActive=$isActive');
+    } catch (e) {
+      debugPrint('[Supabase DB] Error toggling recurring commitment: $e');
+    }
+  }
+
+  /// Adds or updates a recurring commitment
+  Future<void> upsertRecurringCommitment({
+    required String merchantName,
+    required double expectedAmount,
+    String category = 'Subscription',
+    int? typicalDueDay,
+    String frequency = 'MONTHLY',
+    bool isConfirmed = true,
+    String? userId,
+  }) async {
+    final client = _effectiveClient;
+    final uid = userId ?? currentUserId;
+    if (client == null || uid == null) return;
+
+    try {
+      final payload = <String, dynamic>{
+        'user_id': uid,
+        'merchant_name': merchantName.trim(),
+        'expected_amount': expectedAmount,
+        'category': category.trim(),
+        'frequency': frequency,
+        'is_confirmed': isConfirmed,
+        'is_active': true,
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
+      };
+      if (typicalDueDay != null) {
+        payload['typical_due_day'] = typicalDueDay;
+      }
+      await client.from('user_recurring_commitments').upsert(
+        payload,
+        onConflict: 'user_id,merchant_name',
+      );
+      debugPrint('[Supabase DB] Successfully upserted recurring commitment for $merchantName');
+    } catch (e) {
+      debugPrint('[Supabase DB] Error upserting recurring commitment: $e');
     }
   }
 }

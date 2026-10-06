@@ -11,6 +11,8 @@ class ProfileCompletionDialog extends ConsumerStatefulWidget {
   final String? initialName;
   final DateTime? initialDob;
   final String? initialGender;
+  final String? initialIncomeType;
+  final double? initialMonthlyIncome;
   final bool isMandatory;
 
   const ProfileCompletionDialog({
@@ -18,6 +20,8 @@ class ProfileCompletionDialog extends ConsumerStatefulWidget {
     this.initialName,
     this.initialDob,
     this.initialGender,
+    this.initialIncomeType,
+    this.initialMonthlyIncome,
     this.isMandatory = true,
   });
 
@@ -27,6 +31,8 @@ class ProfileCompletionDialog extends ConsumerStatefulWidget {
     String? initialName,
     DateTime? initialDob,
     String? initialGender,
+    String? initialIncomeType,
+    double? initialMonthlyIncome,
     bool isMandatory = true,
   }) {
     return showDialog<bool>(
@@ -36,6 +42,8 @@ class ProfileCompletionDialog extends ConsumerStatefulWidget {
         initialName: initialName,
         initialDob: initialDob,
         initialGender: initialGender,
+        initialIncomeType: initialIncomeType,
+        initialMonthlyIncome: initialMonthlyIncome,
         isMandatory: isMandatory,
       ),
     );
@@ -50,20 +58,57 @@ class _ProfileCompletionDialogState
     extends ConsumerState<ProfileCompletionDialog> {
   final _formKey = GlobalKey<FormState>();
   late final TextEditingController _nameController;
+  late final TextEditingController _incomeController;
   DateTime? _selectedDob;
   String? _selectedGender;
+  String? _selectedIncomeType;
   bool _isSaving = false;
   String? _errorMessage;
 
   late String _originalName;
   DateTime? _originalDob;
   String? _originalGender;
+  String? _originalIncomeType;
+  String _originalIncomeText = '';
 
   static const List<String> _genderOptions = [
     'Male',
     'Female',
     'Non-Binary',
     'Prefer not to say',
+  ];
+
+  static const List<Map<String, String>> _incomeTypeOptions = [
+    {
+      'id': 'Salaried',
+      'label': 'Salaried Employee',
+      'desc': 'Predictable monthly payroll',
+    },
+    {
+      'id': 'Freelancer',
+      'label': 'Freelancer / Contractor',
+      'desc': 'Variable project-based inflows',
+    },
+    {
+      'id': 'Business',
+      'label': 'Business Owner',
+      'desc': 'Self-employed / revenue draws',
+    },
+    {
+      'id': 'Allowance',
+      'label': 'Monthly Allowance',
+      'desc': 'Family support / stipend',
+    },
+    {
+      'id': 'Passive',
+      'label': 'Pension / Passive Income',
+      'desc': 'Investments, rentals, annuities',
+    },
+    {
+      'id': 'Other',
+      'label': 'Other / Prefer not to say',
+      'desc': 'Unspecified cashflow rhythm',
+    },
   ];
 
   @override
@@ -77,10 +122,30 @@ class _ProfileCompletionDialogState
         ? initialG
         : null;
 
+    final initialInc = widget.initialIncomeType?.trim();
+    _originalIncomeType = (initialInc != null &&
+            _incomeTypeOptions.any((opt) => opt['id'] == initialInc))
+        ? initialInc
+        : null;
+
+    if (widget.initialMonthlyIncome != null &&
+        widget.initialMonthlyIncome! > 0) {
+      final double val = widget.initialMonthlyIncome!;
+      _originalIncomeText =
+          val == val.roundToDouble() ? val.toInt().toString() : val.toString();
+    } else {
+      _originalIncomeText = '';
+    }
+
     _nameController = TextEditingController(text: _originalName);
     _nameController.addListener(_onFieldChanged);
+
+    _incomeController = TextEditingController(text: _originalIncomeText);
+    _incomeController.addListener(_onFieldChanged);
+
     _selectedDob = _originalDob;
     _selectedGender = _originalGender;
+    _selectedIncomeType = _originalIncomeType;
   }
 
   void _onFieldChanged() {
@@ -106,12 +171,34 @@ class _ProfileCompletionDialogState
       _originalName = (name != null && name != 'Setthi Member') ? name : '';
       _nameController.text = _originalName;
     }
+    if (widget.initialIncomeType != oldWidget.initialIncomeType) {
+      final initialInc = widget.initialIncomeType?.trim();
+      _originalIncomeType = (initialInc != null &&
+              _incomeTypeOptions.any((opt) => opt['id'] == initialInc))
+          ? initialInc
+          : null;
+      _selectedIncomeType = _originalIncomeType;
+    }
+    if (widget.initialMonthlyIncome != oldWidget.initialMonthlyIncome) {
+      if (widget.initialMonthlyIncome != null &&
+          widget.initialMonthlyIncome! > 0) {
+        final double val = widget.initialMonthlyIncome!;
+        _originalIncomeText = val == val.roundToDouble()
+            ? val.toInt().toString()
+            : val.toString();
+      } else {
+        _originalIncomeText = '';
+      }
+      _incomeController.text = _originalIncomeText;
+    }
   }
 
   @override
   void dispose() {
     _nameController.removeListener(_onFieldChanged);
     _nameController.dispose();
+    _incomeController.removeListener(_onFieldChanged);
+    _incomeController.dispose();
     super.dispose();
   }
 
@@ -126,7 +213,14 @@ class _ProfileCompletionDialogState
     final bool nameChanged = name != _originalName;
     final bool dobChanged = !_isSameDay(_selectedDob, _originalDob);
     final bool genderChanged = _selectedGender != _originalGender;
-    return nameChanged || dobChanged || genderChanged;
+    final bool incomeTypeChanged = _selectedIncomeType != _originalIncomeType;
+    final bool incomeAmountChanged =
+        _incomeController.text.trim() != _originalIncomeText;
+    return nameChanged ||
+        dobChanged ||
+        genderChanged ||
+        incomeTypeChanged ||
+        incomeAmountChanged;
   }
 
   bool get _isFormValid {
@@ -217,6 +311,10 @@ class _ProfileCompletionDialogState
     final fullName = _nameController.text.trim();
     final calculatedAge = _calculateAge(_selectedDob!);
 
+    final incomeText = _incomeController.text.trim().replaceAll(',', '');
+    final double? parsedIncome =
+        incomeText.isNotEmpty ? double.tryParse(incomeText) : null;
+
     try {
       final dbService = ref.read(supabaseDbServiceProvider);
       await dbService.upsertProfile(
@@ -226,6 +324,8 @@ class _ProfileCompletionDialogState
         dateOfBirth: _selectedDob,
         age: calculatedAge,
         gender: _selectedGender,
+        incomeType: _selectedIncomeType,
+        expectedMonthlyIncome: parsedIncome,
       );
 
       try {
@@ -601,9 +701,160 @@ class _ProfileCompletionDialogState
                       );
                     }).toList(),
                   ),
+                  const SizedBox(height: 20),
+
+                  // 4. Income Type / Professional Tag (Optional / Recommended)
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text(
+                        'Income & Employment Type',
+                        style: TextStyle(
+                          color: Colors.white70,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 6,
+                          vertical: 2,
+                        ),
+                        decoration: BoxDecoration(
+                          color: DpcColors.surfaceTrack,
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: const Text(
+                          'OPTIONAL',
+                          style: TextStyle(
+                            color: DpcColors.textMuted,
+                            fontSize: 9,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  const Text(
+                    'Calibrates cashflow rhythm and safe-to-spend estimations.',
+                    style: TextStyle(
+                      color: DpcColors.textMuted,
+                      fontSize: 11,
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: _incomeTypeOptions.map((opt) {
+                      final isSelected = _selectedIncomeType == opt['id'];
+                      return InkWell(
+                        key: Key('income_type_chip_${opt['id']}'),
+                        onTap: () {
+                          setState(() {
+                            if (_selectedIncomeType == opt['id']) {
+                              _selectedIncomeType = null;
+                            } else {
+                              _selectedIncomeType = opt['id'];
+                            }
+                            _errorMessage = null;
+                          });
+                        },
+                        borderRadius: BorderRadius.circular(10),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 8,
+                          ),
+                          decoration: BoxDecoration(
+                            color: isSelected
+                                ? mintAccent.withValues(alpha: 0.15)
+                                : DpcColors.bgOled,
+                            borderRadius: BorderRadius.circular(10),
+                            border: Border.all(
+                              color: isSelected
+                                  ? mintAccent
+                                  : DpcColors.surfaceBorder,
+                              width: 1.2,
+                            ),
+                          ),
+                          child: Text(
+                            opt['label']!,
+                            style: TextStyle(
+                              color: isSelected
+                                  ? mintAccent
+                                  : DpcColors.textSecondary,
+                              fontSize: 12,
+                              fontWeight: isSelected
+                                  ? FontWeight.w700
+                                  : FontWeight.w500,
+                            ),
+                          ),
+                        ),
+                      );
+                    }).toList(),
+                  ),
+                  const SizedBox(height: 16),
+
+                  // 5. Expected Monthly Income (Optional)
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        _selectedIncomeType == 'Freelancer'
+                            ? 'Estimated Monthly Baseline'
+                            : 'Expected Monthly Inflow',
+                        style: const TextStyle(
+                          color: Colors.white70,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 6,
+                          vertical: 2,
+                        ),
+                        decoration: BoxDecoration(
+                          color: DpcColors.surfaceTrack,
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: const Text(
+                          'OPTIONAL',
+                          style: TextStyle(
+                            color: DpcColors.textMuted,
+                            fontSize: 9,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    _selectedIncomeType == 'Freelancer'
+                        ? 'Conservative monthly average used to protect against cash crunches.'
+                        : 'Helps project upcoming cashflow before your salary or allowance credits.',
+                    style: const TextStyle(
+                      color: DpcColors.textMuted,
+                      fontSize: 11,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  TextFormField(
+                    key: const Key('profile_income_input'),
+                    controller: _incomeController,
+                    keyboardType: TextInputType.number,
+                    style: const TextStyle(color: Colors.white, fontSize: 14),
+                    decoration: _buildInputDecoration(
+                      hint: 'e.g. 50000',
+                      icon: Icons.currency_rupee_rounded,
+                    ),
+                  ),
                   const SizedBox(height: 24),
 
-                  // 4. Save & Continue Action Button
+                  // 6. Save & Continue Action Button
                   SizedBox(
                     width: double.infinity,
                     height: 48,
