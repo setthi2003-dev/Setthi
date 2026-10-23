@@ -432,11 +432,12 @@ class SupabaseDbService {
 
   /// Fetches stored bank transactions for the current user from public.bank_transactions with pagination.
   Future<List<BankTransaction>> fetchStoredTransactions({
+    String? userId,
     int? limit,
     int? offset,
   }) async {
     final client = _effectiveClient;
-    final uid = currentUserId;
+    final uid = userId ?? currentUserId;
     if (client == null || uid == null) return [];
 
     try {
@@ -464,9 +465,9 @@ class SupabaseDbService {
   }
 
   /// Returns the total count of stored transactions for the current user
-  Future<int> countStoredTransactions() async {
+  Future<int> countStoredTransactions([String? userId]) async {
     final client = _effectiveClient;
-    final uid = currentUserId;
+    final uid = userId ?? currentUserId;
     if (client == null || uid == null) return 0;
 
     try {

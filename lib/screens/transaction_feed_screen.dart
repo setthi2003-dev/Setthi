@@ -3519,8 +3519,9 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
     var hasActiveConsent = ref.read(hasActiveConsentProvider);
     if (!hasActiveConsent) {
       try {
+        final user = ref.read(currentUserProvider);
         final dbService = ref.read(supabaseDbServiceProvider);
-        final activeConsent = await dbService.fetchActiveConsent();
+        final activeConsent = await dbService.fetchActiveConsent(userId: user?.id);
         if (activeConsent != null && activeConsent['consent_id'] != null) {
           final cid = activeConsent['consent_id'] as String;
           final aaService = ref.read(setuAaServiceProvider);
@@ -3564,12 +3565,10 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
           return;
         }
       }
-      if (context.mounted) {
-        await _showLinkBankBottomSheet(context, ref);
-      }
-    } else {
-      await ref.read(transactionFeedProvider.notifier).syncTransactions();
     }
+
+    // Always perform a clean refresh of data without popping up any modal
+    await ref.read(transactionFeedProvider.notifier).syncTransactions();
   }
 
   /// DPC Styled Link Bank Bottom Sheet

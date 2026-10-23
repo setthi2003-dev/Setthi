@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../config/supabase_config.dart';
@@ -214,19 +215,20 @@ class TransactionFeedNotifier extends AsyncNotifier<List<BankTransaction>> {
 
   @override
   Future<List<BankTransaction>> build() async {
-    ref.watch(currentUserProvider);
+    final user = ref.watch(currentUserProvider);
     final consentId = ref.watch(activeConsentIdProvider);
     final dbService = ref.watch(supabaseDbServiceProvider);
 
     // 1. Fetch total count of stored transactions for pagination metadata
     try {
-      _totalCount = await dbService.countStoredTransactions();
+      _totalCount = await dbService.countStoredTransactions(user?.id);
     } catch (_) {}
 
     // 2. Fetch first page of stored transactions (on-demand pagination)
     List<BankTransaction> storedTxns = [];
     try {
       storedTxns = await dbService.fetchStoredTransactions(
+        userId: user?.id,
         limit: defaultPageSize,
         offset: 0,
       );
@@ -411,14 +413,15 @@ class TransactionFeedNotifier extends AsyncNotifier<List<BankTransaction>> {
     } catch (_) {}
   }
 
-  /// Manually trigger a transaction sync from the backend edge function.
+  /// Manually trigger a transaction sync from the backend edge function or reload from database.
   Future<void> syncTransactions() async {
+    final user = ref.read(currentUserProvider);
     var consentId = ref.read(activeConsentIdProvider);
     final dbService = ref.read(supabaseDbServiceProvider);
 
     if (consentId == null || consentId.isEmpty) {
       try {
-        final activeConsent = await dbService.fetchActiveConsent();
+        final activeConsent = await dbService.fetchActiveConsent(userId: user?.id);
         if (activeConsent != null && activeConsent['consent_id'] != null) {
           consentId = activeConsent['consent_id'] as String;
           ref.read(activeConsentIdProvider.notifier).setConsentId(consentId);
@@ -426,25 +429,45 @@ class TransactionFeedNotifier extends AsyncNotifier<List<BankTransaction>> {
       } catch (_) {}
     }
 
-    if ((consentId == null || consentId.isEmpty) && !SupabaseConfig.isConfigured) {
-      final stored = await dbService.fetchStoredTransactions(
-        limit: defaultPageSize,
-        offset: 0,
-      );
-      state = AsyncData(stored);
+    // Case 1: No live AA consent (PDF imported statement users)
+    if (consentId == null || consentId.isEmpty) {
+      final currentList = state.value ?? [];
+      try {
+        final count = await dbService.countStoredTransactions(user?.id);
+        _totalCount = count;
+        final stored = await dbService.fetchStoredTransactions(
+          userId: user?.id,
+          limit: defaultPageSize,
+          offset: 0,
+        );
+        _hasMore = stored.length >= defaultPageSize &&
+            (_totalCount == 0 || stored.length < _totalCount);
+        if (stored.isNotEmpty) {
+          state = AsyncData(stored);
+        } else if (currentList.isNotEmpty) {
+          state = AsyncData(currentList);
+        }
+      } catch (e) {
+        debugPrint('[TransactionFeedNotifier] Refresh error: $e');
+        if (currentList.isNotEmpty) {
+          state = AsyncData(currentList);
+        }
+      }
       return;
     }
 
+    // Case 2: Live AA consent active
+    final currentList = state.value ?? [];
     state = const AsyncLoading();
     state = await AsyncValue.guard(() async {
       try {
         await dbService.triggerBackendSync(consentId: consentId);
       } on SetuConsentExpiredException catch (_) {
-        // Check if transactions were stored before declaring session expired
-        final count = await dbService.countStoredTransactions();
+        final count = await dbService.countStoredTransactions(user?.id);
         if (count > 0) {
           _totalCount = count;
           final stored = await dbService.fetchStoredTransactions(
+            userId: user?.id,
             limit: defaultPageSize,
             offset: 0,
           );
@@ -457,6 +480,7 @@ class TransactionFeedNotifier extends AsyncNotifier<List<BankTransaction>> {
           await dbService.updateConsentStatus(consentId: consentId, status: 'EXPIRED');
         }
         final stored = await dbService.fetchStoredTransactions(
+          userId: user?.id,
           limit: defaultPageSize,
           offset: 0,
         );
@@ -465,35 +489,37 @@ class TransactionFeedNotifier extends AsyncNotifier<List<BankTransaction>> {
           'Bank consent session has expired or completed. Please reconnect your bank.',
         );
       } catch (e) {
-        // If repository is overridden (e.g. in widget tests with _FakeTestRepository)
         final repository = ref.read(transactionRepositoryProvider);
         if (repository is! BackendTransactionRepository) {
           final txns = await repository.fetchTransactions();
           return txns;
         }
 
-        // Check if transactions successfully reached Supabase before failing
-        final count = await dbService.countStoredTransactions();
+        final count = await dbService.countStoredTransactions(user?.id);
         if (count > 0) {
           _totalCount = count;
           final stored = await dbService.fetchStoredTransactions(
+            userId: user?.id,
             limit: defaultPageSize,
             offset: 0,
           );
           if (stored.isNotEmpty) return stored;
         }
-
+        if (currentList.isNotEmpty) {
+          return currentList;
+        }
         rethrow;
       }
 
-      _totalCount = await dbService.countStoredTransactions();
+      _totalCount = await dbService.countStoredTransactions(user?.id);
       final freshStored = await dbService.fetchStoredTransactions(
+        userId: user?.id,
         limit: defaultPageSize,
         offset: 0,
       );
       _hasMore = freshStored.length >= defaultPageSize &&
           (_totalCount == 0 || freshStored.length < _totalCount);
-      return freshStored;
+      return freshStored.isNotEmpty ? freshStored : currentList;
     });
   }
 
