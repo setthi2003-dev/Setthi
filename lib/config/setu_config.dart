@@ -11,17 +11,17 @@ class SetuConfig {
 
   static const String clientId = String.fromEnvironment(
     'SETU_CLIENT_ID',
-    defaultValue: '',
+    defaultValue: '7949496b-27cf-4418-b222-e7f81cd0e1ab',
   );
 
   static const String clientSecret = String.fromEnvironment(
     'SETU_CLIENT_SECRET',
-    defaultValue: '',
+    defaultValue: 'Mqi65qJlcaHrGVKbS00TFmO7INfvlb6P',
   );
 
   static const String productInstanceId = String.fromEnvironment(
     'SETU_PRODUCT_INSTANCE_ID',
-    defaultValue: '',
+    defaultValue: 'cfb07d1d-1162-4f4f-ba51-35cfe4a66c35',
   );
 
   static const String redirectUrl = String.fromEnvironment(
