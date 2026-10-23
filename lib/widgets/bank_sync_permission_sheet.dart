@@ -163,7 +163,7 @@ class _BankSyncPermissionSheetState extends State<BankSyncPermissionSheet> {
                       ),
                       SizedBox(width: 5),
                       Text(
-                        'CONSENT ACTIVE',
+                        'CONNECTED',
                         style: TextStyle(
                           color: DpcColors.accentPositive,
                           fontSize: 10,
@@ -190,7 +190,7 @@ class _BankSyncPermissionSheetState extends State<BankSyncPermissionSheet> {
             ),
             const SizedBox(height: 6),
             const Text(
-              'Your bank account is approved. Slide below to authorize Setthi to fetch and organize your financial transactions.',
+              'Your bank account is linked. Slide below to let Setthi organize and show your transactions.',
               style: TextStyle(
                 color: DpcColors.textSecondary,
                 fontSize: 13,
@@ -199,7 +199,7 @@ class _BankSyncPermissionSheetState extends State<BankSyncPermissionSheet> {
             ),
             const SizedBox(height: 20),
 
-            // Telemetry Security Features
+            // Security Features
             Container(
               padding: const EdgeInsets.all(14),
               decoration: BoxDecoration(
@@ -211,20 +211,20 @@ class _BankSyncPermissionSheetState extends State<BankSyncPermissionSheet> {
                 children: [
                   _buildSecurityRow(
                     icon: Icons.lock_outline_rounded,
-                    title: 'Read-Only Statement Access',
-                    subtitle: 'Setthi cannot initiate payments or modify your account.',
+                    title: 'Read-Only Access',
+                    subtitle: 'Setthi can only read your statement. It can never move or withdraw your money.',
                   ),
                   const Divider(color: DpcColors.surfaceBorder, height: 18),
                   _buildSecurityRow(
                     icon: Icons.shield_outlined,
-                    title: 'RBI Regulated Gateway',
-                    subtitle: 'Powered by licensed Setu Account Aggregator.',
+                    title: 'Regulated by RBI',
+                    subtitle: 'Secure bank connection powered by licensed Setu Account Aggregator.',
                   ),
                   const Divider(color: DpcColors.surfaceBorder, height: 18),
                   _buildSecurityRow(
                     icon: Icons.security_rounded,
-                    title: '256-Bit Encrypted Data',
-                    subtitle: 'Credentials stored securely in Supabase Vault.',
+                    title: 'Bank-Grade Security',
+                    subtitle: 'Your information is locked with strong bank-level encryption.',
                   ),
                 ],
               ),

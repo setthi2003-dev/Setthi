@@ -10,6 +10,8 @@ import '../services/supabase_db_service.dart';
 import 'auth_providers.dart';
 import 'supabase_provider.dart';
 
+export 'supabase_provider.dart' show balanceProvider;
+
 /// Provider for the Setu Account Aggregator service instance
 final setuAaServiceProvider = Provider<SetuAaService>((ref) {
   final dbService = ref.watch(supabaseDbServiceProvider);
@@ -366,7 +368,11 @@ class TransactionFeedNotifier extends AsyncNotifier<List<BankTransaction>> {
     } else {
       updatedList = currentList.map((t) {
         if (t.txnId == txnId) {
-          return t.copyWith(category: category);
+          return t.copyWith(
+            category: category,
+            habitCategory: category,
+            tagSource: 'user',
+          );
         }
         return t;
       }).toList();
@@ -380,6 +386,14 @@ class TransactionFeedNotifier extends AsyncNotifier<List<BankTransaction>> {
         txnId: txnId,
         category: category,
       );
+
+      // Invalidate balance and telemetry providers so post_import_pipeline results refresh
+      ref.invalidate(balanceProvider);
+      ref.invalidate(cashflowRhythmProvider);
+      ref.invalidate(recurringCommitmentsProvider);
+      ref.invalidate(telemetryMetricsProvider);
+      ref.invalidate(homeTelemetry7dProvider);
+      ref.invalidate(habitProfileProvider);
 
       if (applyToAllFromMerchant && !isGeneric && cleanMerchantName != null) {
         await dbService.updateAllTransactionsCategoryByMerchant(
@@ -549,116 +563,6 @@ final totalTransactionsCountProvider = Provider<int>((ref) {
   return ref.watch(transactionFeedProvider.notifier).totalCount;
 });
 
-/// Derived provider: latest available bank balance
-final latestBalanceProvider = Provider<double>((ref) {
-  final transactions = ref.watch(transactionFeedProvider).value ?? [];
-  if (transactions.isEmpty) return 0.0;
-  return transactions.first.currentBalance;
-});
-
-/// Weekly telemetry record encapsulating cash flow and temporal anchoring
-typedef WeeklyTelemetryStats = ({
-  double spent,
-  double inflow,
-  String periodLabel,
-  bool isLive,
-  DateTime? latestTxnTimestamp,
-  DateTime? lastSyncedAt,
-});
-
-/// Derived provider: stats for the active weekly window (spent vs. inflow) with transaction_timestamp and created_at telemetry
-final weeklyStatsProvider = Provider<WeeklyTelemetryStats>((ref) {
-  final transactions = ref.watch(transactionFeedProvider).value ?? [];
-  if (transactions.isEmpty) {
-    return (
-      spent: 0.0,
-      inflow: 0.0,
-      periodLabel: 'this week',
-      isLive: true,
-      latestTxnTimestamp: null,
-      lastSyncedAt: null,
-    );
-  }
-
-  final now = DateTime.now();
-  DateTime latestTxnDate = transactions.first.transactionTimestamp;
-  DateTime? latestCreatedAt = transactions.first.createdAt;
-  for (final t in transactions) {
-    if (t.transactionTimestamp.isAfter(latestTxnDate)) {
-      latestTxnDate = t.transactionTimestamp;
-    }
-    if (t.createdAt != null) {
-      if (latestCreatedAt == null || t.createdAt!.isAfter(latestCreatedAt)) {
-        latestCreatedAt = t.createdAt;
-      }
-    }
-  }
-
-  // Live if latest transaction is within 7 days of now
-  final isLive = now.difference(latestTxnDate).inDays.abs() <= 7;
-  final anchorDate = isLive ? now : latestTxnDate;
-  final sevenDaysBefore = anchorDate.subtract(const Duration(days: 7));
-
-  var spent = transactions
-      .where((t) =>
-          t.isDebit &&
-          t.transactionTimestamp.isAfter(sevenDaysBefore) &&
-          !t.transactionTimestamp.isAfter(anchorDate))
-      .fold(0.0, (acc, t) => acc + t.amount);
-
-  var inflow = transactions
-      .where((t) =>
-          t.isCredit &&
-          t.transactionTimestamp.isAfter(sevenDaysBefore) &&
-          !t.transactionTimestamp.isAfter(anchorDate))
-      .fold(0.0, (acc, t) => acc + t.amount);
-
-  const shortMonths = [
-    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
-  ];
-
-  String label;
-  if (isLive) {
-    label = 'this week';
-  } else {
-    final startFmt = '${sevenDaysBefore.day} ${shortMonths[sevenDaysBefore.month - 1]}';
-    final endFmt = '${anchorDate.day} ${shortMonths[anchorDate.month - 1]} ${anchorDate.year}';
-    label = '$startFmt – $endFmt';
-  }
-
-  if (spent == 0.0 && inflow == 0.0) {
-    final monthStart = DateTime(anchorDate.year, anchorDate.month, 1);
-    final monthEnd = DateTime(anchorDate.year, anchorDate.month + 1, 1);
-    spent = transactions
-        .where((t) =>
-            t.isDebit &&
-            !t.transactionTimestamp.isBefore(monthStart) &&
-            t.transactionTimestamp.isBefore(monthEnd))
-        .fold(0.0, (acc, t) => acc + t.amount);
-    inflow = transactions
-        .where((t) =>
-            t.isCredit &&
-            !t.transactionTimestamp.isBefore(monthStart) &&
-            t.transactionTimestamp.isBefore(monthEnd))
-        .fold(0.0, (acc, t) => acc + t.amount);
-    if (isLive) {
-      label = 'this month';
-    } else {
-      label = '${shortMonths[anchorDate.month - 1]} ${anchorDate.year}';
-    }
-  }
-
-  return (
-    spent: spent,
-    inflow: inflow,
-    periodLabel: label,
-    isLive: isLive,
-    latestTxnTimestamp: latestTxnDate,
-    lastSyncedAt: latestCreatedAt,
-  );
-});
-
 /// Derived provider: transactions grouped by timeline section (legacy format)
 final groupedTransactionsProvider =
     Provider<Map<String, List<BankTransaction>>>((ref) {
@@ -760,6 +664,9 @@ class TelemetryPeriodIndexNotifier extends Notifier<int> {
   set state(int value) => super.state = value;
 }
 
+/// Strictly supported telemetry periods for get_telemetry_metrics RPC
+const telemetryPeriods = ['all', 'month', '7d'];
+
 final telemetryPeriodIndexProvider =
     NotifierProvider<TelemetryPeriodIndexNotifier, int>(
         TelemetryPeriodIndexNotifier.new);
@@ -767,10 +674,19 @@ final telemetryPeriodIndexProvider =
 /// Telemetry metrics provider delivering real SQL aggregations from get_telemetry_metrics RPC
 final telemetryMetricsProvider = FutureProvider<Map<String, dynamic>?>((ref) async {
   final filterIndex = ref.watch(telemetryPeriodIndexProvider);
-  const periods = ['all', 'month', '7d', 'debits', 'inflow'];
-  final period = (filterIndex >= 0 && filterIndex < periods.length) ? periods[filterIndex] : 'all';
+  final period = (filterIndex >= 0 && filterIndex < telemetryPeriods.length)
+      ? telemetryPeriods[filterIndex]
+      : 'all';
   ref.watch(currentUserProvider);
   ref.watch(transactionFeedProvider);
   final dbService = ref.watch(supabaseDbServiceProvider);
   return await dbService.fetchTelemetryMetrics(period: period);
+});
+
+/// Telemetry metrics for home screen 7-day card
+final homeTelemetry7dProvider = FutureProvider<Map<String, dynamic>?>((ref) async {
+  ref.watch(currentUserProvider);
+  ref.watch(transactionFeedProvider);
+  final dbService = ref.watch(supabaseDbServiceProvider);
+  return await dbService.fetchTelemetryMetrics(period: '7d');
 });

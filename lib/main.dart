@@ -3,15 +3,21 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:rive/rive.dart';
+import 'config/navigation_keys.dart';
 import 'config/dpc_tokens.dart';
 import 'config/setu_config.dart';
 import 'config/supabase_config.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'firebase_options.dart';
 import 'providers/auth_providers.dart';
+import 'providers/chat_providers.dart';
+import 'providers/pdf_statement_provider.dart';
+import 'providers/supabase_provider.dart';
+import 'providers/transaction_providers.dart';
 import 'screens/auth_screen.dart';
 import 'screens/reset_password_screen.dart';
 import 'screens/transaction_feed_screen.dart';
-
+ 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
@@ -62,6 +68,32 @@ class SetthiApp extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    // When authentication state transitions to signed out, dismiss any open modals/dialogs
+    ref.listen<bool>(isAuthenticatedProvider, (previous, next) {
+      if (previous == true && next == false) {
+        rootNavigatorKey.currentState?.popUntil((route) => route.isFirst);
+      }
+    });
+
+    // Reset all user-scoped in-memory state whenever user session changes (sign-in, sign-out, account switch)
+    ref.listen<User?>(currentUserProvider, (previous, next) {
+      if (previous?.id != next?.id) {
+        ref.read(pdfStatementImportProvider.notifier).reset();
+        ref.read(lastParsedPdfResultProvider.notifier).clear();
+        ref.invalidate(chatMessagesProvider);
+        ref.invalidate(setthiIcebreakerProvider);
+        ref.invalidate(aiCreditsProvider);
+        ref.invalidate(userProfileProvider);
+        ref.invalidate(cashflowRhythmProvider);
+        ref.invalidate(recurringCommitmentsProvider);
+        ref.invalidate(habitProfileProvider);
+        ref.invalidate(telemetryMetricsProvider);
+        ref.invalidate(transactionFeedProvider);
+        ref.invalidate(activeConsentIdProvider);
+        ref.invalidate(pendingConsentIdProvider);
+      }
+    });
+
     final isPasswordRecovery = ref.watch(isPasswordRecoveryProvider);
     final isAuthenticated = ref.watch(isAuthenticatedProvider);
     final user = ref.watch(currentUserProvider);
@@ -69,6 +101,8 @@ class SetthiApp extends ConsumerWidget {
 
     return MaterialApp(
       title: 'Setthi - Gen Z Finance',
+      navigatorKey: rootNavigatorKey,
+      scaffoldMessengerKey: rootScaffoldMessengerKey,
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         brightness: Brightness.dark,

@@ -31,6 +31,11 @@ class BankTransaction {
   final String? precomputedMerchantName;
   final String? spendTier;
   final bool isRecurring;
+  final int? seq;
+  final String? txnKind;
+  final String? habitCategory;
+  final String? counterpartyKey;
+  final String? tagSource;
 
   const BankTransaction({
     required this.txnId,
@@ -45,6 +50,11 @@ class BankTransaction {
     this.precomputedMerchantName,
     this.spendTier,
     this.isRecurring = false,
+    this.seq,
+    this.txnKind,
+    this.habitCategory,
+    this.counterpartyKey,
+    this.tagSource,
   });
 
   bool get isCredit => type == TransactionType.credit;
@@ -56,11 +66,42 @@ class BankTransaction {
     if (precomputedMerchantName != null && precomputedMerchantName!.trim().isNotEmpty) {
       return precomputedMerchantName!;
     }
+    if (counterpartyKey != null && counterpartyKey!.trim().isNotEmpty) {
+      final cp = counterpartyKey!.trim().toUpperCase();
+      if (!['DR', 'CR', 'REV', 'UPI'].contains(cp)) {
+        return _capitalizeWords(counterpartyKey!);
+      }
+    }
+
+    final effectiveNarration = narration.replaceFirst(RegExp(r'^\s*\([0-9A-Za-z/\.\-]+\)\s*'), '').trim();
 
     // 1. Dynamic lookup against MerchantCategoryRegistry (from Supabase table)
-    final matchedRule = MerchantCategoryRegistry.instance.findMatch(narration);
+    final matchedRule = MerchantCategoryRegistry.instance.findMatch(effectiveNarration);
     if (matchedRule != null) {
       return matchedRule.cleanName;
+    }
+
+    // 2. Direct Indian banking pattern extraction matching extract_counterparty
+    if (RegExp(r'^MB:RECEIVED FROM\s+', caseSensitive: false).hasMatch(effectiveNarration)) {
+      var name = effectiveNarration.replaceFirst(RegExp(r'^MB:RECEIVED FROM\s+', caseSensitive: false), '').trim();
+      name = name.replaceAll(RegExp(r'\s+\S*\d\S*(\s+\d+)?\s*$'), '').trim();
+      if (name.isNotEmpty) {
+        return _capitalizeWords(name);
+      }
+    }
+
+    if (RegExp(r'^(PCI|PCD)/', caseSensitive: false).hasMatch(effectiveNarration)) {
+      final parts = effectiveNarration.split('/');
+      if (parts.length >= 3 && parts[2].trim().isNotEmpty) {
+        return _capitalizeWords(parts[2].trim());
+      }
+    }
+
+    if (RegExp(r'^(RECD:)?IMPS/', caseSensitive: false).hasMatch(effectiveNarration)) {
+      final parts = effectiveNarration.split('/');
+      if (parts.length >= 3 && parts[2].trim().isNotEmpty) {
+        return _capitalizeWords(parts[2].trim());
+      }
     }
 
     // Set of common banking mode and status codes to ignore as merchant names
@@ -69,7 +110,7 @@ class BankTransaction {
       'ACH', 'ECS', 'NACH', 'CR', 'DR', 'DE', 'WD', 'CW', 'FT',
       'P2A', 'P2P', 'TRF', 'BIL', 'INB', 'MB', 'MOB', 'REV', 'RET',
       'CHQ', 'CLR', 'PAYMENT', 'TRANSFER', 'PURCHASE', 'DEPOSIT',
-      'WITHDRAWAL', 'SETU', 'REFUND', 'BANK',
+      'WITHDRAWAL', 'SETU', 'REFUND', 'BANK', 'RECEIVED', 'FROM', 'RECD',
       'OTHER', 'OTHERS', 'MISC',
     };
 
@@ -77,8 +118,8 @@ class BankTransaction {
     // e.g. "CARD/DE/995415932503/Amira Salvi/ANIJ/08764285"
     //      "CASH/CR/467366268432/Sara Dave/ZTAE/35521479"
     //      "UPI/4293021984/Swiggy/swiggy@icici/Payment"
-    if (narration.contains('/')) {
-      final segments = narration.split('/');
+    if (effectiveNarration.contains('/')) {
+      final segments = effectiveNarration.split('/');
       for (final rawSegment in segments) {
         var candidate = rawSegment.trim();
         if (candidate.isEmpty) continue;
@@ -98,7 +139,7 @@ class BankTransaction {
     }
 
     // 3. Fallback: clean up special characters and numbers, excluding banking codes
-    final sanitized = narration
+    final sanitized = effectiveNarration
         .replaceAll(RegExp(r'[0-9]+'), '')
         .replaceAll(RegExp(r'[/_\-]'), ' ')
         .trim();
@@ -151,6 +192,54 @@ class BankTransaction {
       } else {
         return '${transactionTimestamp.day} $monthStr ${transactionTimestamp.year}, $timeStr';
       }
+    }
+  }
+
+  /// Formatted calendar date in IST (e.g. "6 Oct 2026") without synthetic times
+  String get istFormattedDate {
+    final ist = transactionTimestamp.isUtc
+        ? transactionTimestamp.add(const Duration(hours: 5, minutes: 30))
+        : transactionTimestamp;
+    const months = [
+      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+    ];
+    return '${ist.day} ${months[ist.month - 1]} ${ist.year}';
+  }
+
+  /// Category name with fallback to 'Not categorised'
+  String get displayCategory {
+    if (habitCategory != null && habitCategory!.trim().isNotEmpty) {
+      return habitCategory!.trim();
+    }
+    if (category != null && category!.trim().isNotEmpty) {
+      return category!.trim();
+    }
+    return 'Not categorised';
+  }
+
+  /// Plain language display label for transaction kind
+  String? get displayKindLabel {
+    final k = (txnKind ?? '').toUpperCase().trim();
+    switch (k) {
+      case 'SPEND':
+        return 'Shop';
+      case 'PERSON_OUT':
+        return 'To person';
+      case 'PERSON_IN':
+        return 'From person';
+      case 'INCOME':
+        return 'Income';
+      case 'BANK_FEE':
+        return 'Bank charge';
+      case 'INVESTMENT':
+        return 'Investment';
+      case 'CC_BILL':
+        return 'Bill';
+      case 'UNSURE':
+        return 'Unclear';
+      default:
+        return null;
     }
   }
 
@@ -238,7 +327,7 @@ class BankTransaction {
     if (cat.contains('entertain') || cat.contains('movie') || cat.contains('ott')) return Icons.movie_filter_rounded;
     if (cat.contains('cafe') || cat.contains('coffee')) return Icons.coffee_rounded;
     if (cat.contains('fitness') || cat.contains('health')) return Icons.fitness_center_rounded;
-    if (cat.contains('bill') || cat.contains('utilit')) return Icons.bolt_rounded;
+    if (cat.contains('bill') || cat.contains('utilit')) return Icons.receipt_long_rounded;
     if (cat.contains('subscript') || cat.contains('tech')) return Icons.devices_rounded;
     if (cat.contains('income') || cat.contains('salary')) return Icons.account_balance_wallet_rounded;
     if (cat.contains('transfer') || cat.contains('upi')) return Icons.swap_horiz_rounded;
@@ -310,13 +399,15 @@ class BankTransaction {
     double? fallbackBalance,
   }) {
     final rawAmount = json['amount'] ?? json['Amount'] ?? json['amt'];
-    final rawBalance = json['currentBalance'] ??
+    final rawBalance = json['current_balance'] ??
+        json['currentBalance'] ??
         json['CurrentBalance'] ??
         json['balance'] ??
         json['Balance'];
     final rawType = (json['type'] ?? json['Type'] ?? json['txnType'] ?? 'DEBIT').toString();
     final rawMode = (json['mode'] ?? json['Mode'] ?? 'UPI').toString();
-    final rawTxnId = (json['txnId'] ??
+    final rawTxnId = (json['txn_id'] ??
+            json['txnId'] ??
             json['TxnId'] ??
             json['id'] ??
             json['Id'] ??
@@ -330,7 +421,8 @@ class BankTransaction {
             json['remark'] ??
             '')
         .toString();
-    final rawTime = json['transactionTimestamp'] ??
+    final rawTime = json['transaction_timestamp'] ??
+        json['transactionTimestamp'] ??
         json['TransactionTimestamp'] ??
         json['dateTime'] ??
         json['valueDate'] ??
@@ -357,6 +449,11 @@ class BankTransaction {
     final parsedSpendTier = json['spend_tier'] ?? json['spendTier'];
     final parsedIsRecurring = json['is_recurring'] ?? json['isRecurring'];
     final rawCreatedAt = json['created_at'] ?? json['createdAt'];
+    final parsedSeq = json['seq'] != null ? (json['seq'] as num).toInt() : null;
+    final parsedTxnKind = json['txn_kind']?.toString();
+    final parsedHabitCat = json['habit_category']?.toString();
+    final parsedCounterpartyKey = json['counterparty_key']?.toString();
+    final parsedTagSource = json['tag_source']?.toString();
 
     return BankTransaction(
       txnId: rawTxnId,
@@ -371,6 +468,11 @@ class BankTransaction {
       precomputedMerchantName: finalCleanName,
       spendTier: parsedSpendTier?.toString(),
       isRecurring: parsedIsRecurring == true || parsedIsRecurring == 'true',
+      seq: parsedSeq,
+      txnKind: parsedTxnKind,
+      habitCategory: parsedHabitCat,
+      counterpartyKey: parsedCounterpartyKey,
+      tagSource: parsedTagSource,
     );
   }
 
@@ -388,6 +490,11 @@ class BankTransaction {
       'clean_merchant_name': cleanMerchantName,
       if (spendTier != null) 'spend_tier': spendTier,
       'is_recurring': isRecurring,
+      if (seq != null) 'seq': seq,
+      if (txnKind != null) 'txn_kind': txnKind,
+      if (habitCategory != null) 'habit_category': habitCategory,
+      if (counterpartyKey != null) 'counterparty_key': counterpartyKey,
+      if (tagSource != null) 'tag_source': tagSource,
     };
   }
 
@@ -404,6 +511,11 @@ class BankTransaction {
     String? precomputedMerchantName,
     String? spendTier,
     bool? isRecurring,
+    int? seq,
+    String? txnKind,
+    String? habitCategory,
+    String? counterpartyKey,
+    String? tagSource,
   }) {
     return BankTransaction(
       txnId: txnId ?? this.txnId,
@@ -418,6 +530,11 @@ class BankTransaction {
       precomputedMerchantName: precomputedMerchantName ?? this.precomputedMerchantName,
       spendTier: spendTier ?? this.spendTier,
       isRecurring: isRecurring ?? this.isRecurring,
+      seq: seq ?? this.seq,
+      txnKind: txnKind ?? this.txnKind,
+      habitCategory: habitCategory ?? this.habitCategory,
+      counterpartyKey: counterpartyKey ?? this.counterpartyKey,
+      tagSource: tagSource ?? this.tagSource,
     );
   }
 }

@@ -16,7 +16,13 @@ class ChatChunkEvent extends ChatStreamEvent {
 
 class ChatDoneEvent extends ChatStreamEvent {
   final int? remainingCredits;
-  const ChatDoneEvent({this.remainingCredits});
+  final String? sessionId;
+  final List<String>? suggestions;
+  const ChatDoneEvent({
+    this.remainingCredits,
+    this.sessionId,
+    this.suggestions,
+  });
 }
 
 class ChatOutOfCreditsEvent extends ChatStreamEvent {
@@ -39,6 +45,7 @@ class ChatService {
   Stream<ChatStreamEvent> sendMessage({
     required String prompt,
     required String accessToken,
+    String? sessionId,
   }) async* {
     if (!SupabaseConfig.isConfigured) {
       yield const ChatErrorEvent('Supabase configuration is missing');
@@ -54,7 +61,11 @@ class ChatService {
       'Content-Type': 'application/json',
       'Accept': 'text/event-stream',
     });
-    request.body = jsonEncode({'prompt': prompt});
+    final bodyMap = <String, dynamic>{'prompt': prompt};
+    if (sessionId != null && sessionId.isNotEmpty) {
+      bodyMap['session_id'] = sessionId;
+    }
+    request.body = jsonEncode(bodyMap);
 
     http.StreamedResponse streamedResponse;
     try {
@@ -116,7 +127,18 @@ class ChatService {
           if (parsed['remaining_credits'] != null) {
             credits = int.tryParse(parsed['remaining_credits'].toString());
           }
-          yield ChatDoneEvent(remainingCredits: credits);
+          final sid = parsed['session_id']?.toString();
+          List<String>? suggs;
+          if (parsed['suggestions'] is List) {
+            suggs = (parsed['suggestions'] as List)
+                .map((e) => e.toString())
+                .toList();
+          }
+          yield ChatDoneEvent(
+            remainingCredits: credits,
+            sessionId: sid,
+            suggestions: suggs,
+          );
           continue;
         }
 

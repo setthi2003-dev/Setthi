@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:uuid/uuid.dart';
 import '../config/supabase_config.dart';
 import '../models/chat_message_model.dart';
 import '../models/merchant_category_model.dart';
@@ -283,6 +284,28 @@ class SupabaseDbService {
     }
   }
 
+  /// Fetches verified bank balance facts via get_current_balance RPC
+  Future<Map<String, dynamic>?> fetchCurrentBalance([String? userId]) async {
+    final client = _effectiveClient;
+    if (client == null) return null;
+
+    try {
+      final res = await client.rpc(
+        'get_current_balance',
+        params: userId != null ? {'p_user_id': userId} : {},
+      );
+      if (res is Map<String, dynamic>) {
+        return res;
+      } else if (res is Map) {
+        return Map<String, dynamic>.from(res);
+      }
+      return null;
+    } catch (e) {
+      debugPrint('[Supabase DB] Error fetching current balance: $e');
+      return null;
+    }
+  }
+
   // ===========================================================================
   // 4. BANK TRANSACTIONS
   // ===========================================================================
@@ -311,29 +334,61 @@ class SupabaseDbService {
     }
   }
 
-  /// Persists a batch of transactions collected from the Setu AA gateway into public.bank_transactions.
+  /// Persists a batch of transactions collected from the Setu AA gateway or PDF parser into public.bank_transactions.
   /// Uses idempotent upsert on (user_id, txn_id) to avoid duplicates while updating current balances.
-  Future<void> saveBankTransactions({
+  Future<bool> saveBankTransactions({
     required List<BankTransaction> transactions,
     String? accountId,
+    String? userId,
+    String? fileName,
   }) async {
     final client = _effectiveClient;
-    final uid = currentUserId;
-    if (client == null || uid == null || transactions.isEmpty) return;
+    final uid = userId ?? currentUserId;
+    if (client == null || uid == null || transactions.isEmpty) return false;
 
     try {
       if (!MerchantCategoryRegistry.instance.isInitializedFromRemote) {
         await fetchMerchantCategories();
       }
 
+      String? effectiveAccId = accountId;
+      if (effectiveAccId == null) {
+        final accounts = await fetchBankAccounts();
+        if (accounts.isNotEmpty) {
+          effectiveAccId = accounts.first['id']?.toString();
+        } else {
+          // If no linked account exists, create an initial account record
+          effectiveAccId = await upsertBankAccount(
+            maskedAccNumber: 'Statement Account',
+            fipId: 'STATEMENT_IMPORT',
+            accountType: 'SAVINGS',
+            currentBalance: 0.0,
+          );
+        }
+      }
+
+      final nowUtcIso = DateTime.now().toUtc().toIso8601String();
+      final importBatchId = const Uuid().v4();
+      final importBatchAt = nowUtcIso;
+
       final rows = transactions.map((t) {
         final match = MerchantCategoryRegistry.instance.findMatch(t.narration);
         final category = t.category ?? match?.category; // null if unmatched
         final cleanName = t.cleanMerchantName;
 
+        final rawMeta = {
+          'source': 'pdf_statement',
+          'fileName': fileName ?? 'bank_statement.pdf',
+          'parsedAt': nowUtcIso,
+          'originalTxnId': t.txnId,
+        };
+
+        final parts = t.txnId.split('_');
+        final seqNum = t.seq ?? (parts.length >= 3 ? int.tryParse(parts[2]) : null);
+
         return <String, dynamic>{
           'user_id': uid,
-          'account_id': ?accountId,
+          'account_id': ?effectiveAccId,
           'txn_id': t.txnId,
           'type': t.type.value,
           'mode': t.mode,
@@ -343,6 +398,12 @@ class SupabaseDbService {
           'narration': t.narration,
           'clean_merchant_name': cleanName,
           'category': category,
+          'raw_data': rawMeta,
+          if (t.spendTier != null && t.spendTier!.isNotEmpty) 'spend_tier': t.spendTier,
+          'is_recurring': t.isRecurring,
+          'seq': ?seqNum,
+          'import_batch_id': importBatchId,
+          'import_batch_at': importBatchAt,
         };
       }).toList();
 
@@ -351,11 +412,21 @@ class SupabaseDbService {
             onConflict: 'user_id,txn_id',
           );
 
+      // Trigger post-import pipeline in Supabase Postgres:
+      // tag_transactions -> sync_detected_recurring_commitments -> classify_transactions -> update bank_accounts -> refresh_habit_profile
+      try {
+        await client.rpc('post_import_pipeline', params: {'p_user_id': uid});
+      } catch (pipeErr) {
+        debugPrint('[Supabase DB] post_import_pipeline RPC error: $pipeErr');
+      }
+
       debugPrint(
         '[Supabase DB] Successfully persisted ${transactions.length} transactions in Supabase!',
       );
+      return true;
     } catch (e) {
       debugPrint('[Supabase DB] Error saving bank transactions: $e');
+      return false;
     }
   }
 
@@ -374,6 +445,7 @@ class SupabaseDbService {
           .select()
           .eq('user_id', uid)
           .order('transaction_timestamp', ascending: false)
+          .order('seq', ascending: false, nullsFirst: false)
           .order('created_at', ascending: false);
 
       if (limit != null) {
@@ -384,25 +456,7 @@ class SupabaseDbService {
 
       final res = await query;
       final list = List<Map<String, dynamic>>.from(res);
-      return list.map((row) {
-        return BankTransaction(
-          txnId: row['txn_id']?.toString() ?? '',
-          type: TransactionType.fromString(row['type']?.toString() ?? 'DEBIT'),
-          mode: row['mode']?.toString() ?? 'UPI',
-          amount: (row['amount'] as num?)?.toDouble() ?? 0.0,
-          currentBalance: (row['current_balance'] as num?)?.toDouble() ?? 0.0,
-          transactionTimestamp: DateTime.tryParse(
-                row['transaction_timestamp']?.toString() ?? '',
-              ) ??
-              DateTime.now(),
-          createdAt: DateTime.tryParse(row['created_at']?.toString() ?? ''),
-          narration: row['narration']?.toString() ?? '',
-          category: row['category']?.toString(),
-          precomputedMerchantName: row['clean_merchant_name']?.toString(),
-          spendTier: row['spend_tier']?.toString(),
-          isRecurring: row['is_recurring'] == true || row['is_recurring'] == 'true',
-        );
-      }).toList();
+      return list.map((row) => BankTransaction.fromJson(row)).toList();
     } catch (e) {
       debugPrint('[Supabase DB] Error loading stored transactions: $e');
       return [];
@@ -431,18 +485,34 @@ class SupabaseDbService {
   Future<void> updateTransactionCategory({
     required String txnId,
     required String category,
+    String? txnKind,
   }) async {
     final client = _effectiveClient;
     final uid = currentUserId;
     if (client == null || uid == null) return;
 
     try {
+      final updates = <String, dynamic>{
+        'category': category,
+        'habit_category': category,
+        'tag_source': 'user',
+      };
+      if (txnKind != null && txnKind.isNotEmpty) {
+        updates['txn_kind'] = txnKind;
+      }
       await client
           .from('bank_transactions')
-          .update({'category': category})
+          .update(updates)
           .eq('user_id', uid)
           .eq('txn_id', txnId);
       debugPrint('[Supabase DB] Updated category for $txnId to $category');
+
+      // Trigger post_import_pipeline to recalculate commitments, balances, and habit profile
+      try {
+        await client.rpc('post_import_pipeline', params: {'p_user_id': uid});
+      } catch (pipeErr) {
+        debugPrint('[Supabase DB] post_import_pipeline RPC error after category update: $pipeErr');
+      }
     } catch (e) {
       debugPrint('[Supabase DB] Error updating transaction category: $e');
     }
@@ -460,10 +530,21 @@ class SupabaseDbService {
     try {
       await client
           .from('bank_transactions')
-          .update({'category': category})
+          .update({
+            'category': category,
+            'habit_category': category,
+            'tag_source': 'user',
+          })
           .eq('user_id', uid)
           .ilike('clean_merchant_name', cleanMerchantName.trim());
       debugPrint('[Supabase DB] Bulk updated category for $cleanMerchantName to $category');
+
+      // Trigger post_import_pipeline to recalculate commitments, balances, and habit profile
+      try {
+        await client.rpc('post_import_pipeline', params: {'p_user_id': uid});
+      } catch (pipeErr) {
+        debugPrint('[Supabase DB] post_import_pipeline RPC error after bulk category update: $pipeErr');
+      }
     } catch (e) {
       debugPrint('[Supabase DB] Error bulk updating merchant category: $e');
     }
@@ -842,6 +923,49 @@ class SupabaseDbService {
       debugPrint('[Supabase DB] Successfully upserted recurring commitment for $merchantName');
     } catch (e) {
       debugPrint('[Supabase DB] Error upserting recurring commitment: $e');
+    }
+  }
+
+  /// Fetches the user's habit profile and financial archetype from user_habit_profile
+  Future<Map<String, dynamic>?> fetchHabitProfile([String? userId]) async {
+    final client = _effectiveClient;
+    final uid = userId ?? currentUserId;
+    if (client == null || uid == null) return null;
+
+    try {
+      final res = await client
+          .from('user_habit_profile')
+          .select('profile, archetype, computed_at')
+          .eq('user_id', uid)
+          .maybeSingle();
+      if (res != null) {
+        return Map<String, dynamic>.from(res);
+      }
+      return null;
+    } catch (e) {
+      debugPrint('[Supabase DB] fetchHabitProfile error: $e');
+      return null;
+    }
+  }
+
+  /// Manually triggers recalculation of habit profile and archetype in Supabase
+  Future<Map<String, dynamic>?> refreshHabitProfile([String? userId]) async {
+    final client = _effectiveClient;
+    final uid = userId ?? currentUserId;
+    if (client == null || uid == null) return null;
+
+    try {
+      final res = await client.rpc(
+        'refresh_habit_profile',
+        params: {'p_user_id': uid},
+      );
+      if (res is Map) {
+        return Map<String, dynamic>.from(res);
+      }
+      return null;
+    } catch (e) {
+      debugPrint('[Supabase DB] refreshHabitProfile RPC error: $e');
+      return null;
     }
   }
 }

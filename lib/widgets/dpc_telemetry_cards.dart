@@ -96,29 +96,35 @@ class DpcTelemetryMetricData {
 
 String _getDefaultDefinition(String title) {
   switch (title.toLowerCase().trim()) {
+    case 'money saved':
     case 'savings retention':
-      return 'How much of the money that came in you actually kept. For example, 40% means for every ₹100 received, you kept ₹40 as savings.';
+      return 'How much of the money you received you kept as savings. For example, 40% means for every ₹100 received, you saved ₹40.';
+    case 'extra spending':
     case 'discretionary ratio':
-      return 'The share of your spending that went to "wants" (food delivery, shopping, outings) instead of "needs" (bills, rent, groceries).';
+      return 'The share of your spending that went to wants (food delivery, shopping, outings) instead of essentials (bills, rent, groceries).';
+    case 'daily pace':
     case 'daily velocity':
-      return 'How fast you spend money each day on average. It shows your daily cash burn rate so you can pace yourself.';
+      return 'How much money you spend each day on average. It helps you pace your spending across the month.';
     case 'financial health':
-      return 'Your overall money fitness score from 0 to 100. It checks if you are saving enough, keeping impulse spending low, and holding a safe balance.';
+      return 'A simple score from 0 to 100 showing how well you are balancing spending, saving, and your account balance.';
     default:
-      return 'Telemetry metric tracking your financial performance and spending habits.';
+      return 'A simple summary to help you track your spending and savings.';
   }
 }
 
 String _getDefaultFormula(String title) {
   switch (title.toLowerCase().trim()) {
+    case 'money saved':
     case 'savings retention':
-      return '(Total Inflow - Total Outflow) / Total Inflow';
+      return '(Money In - Money Out) / Money In';
+    case 'extra spending':
     case 'discretionary ratio':
-      return 'Discretionary Outflow / Total Outflow';
+      return 'Extra Spending / Total Spending';
+    case 'daily pace':
     case 'daily velocity':
-      return 'Total Outflow / Active Period Days';
+      return 'Total Spending / Number of Days';
     case 'financial health':
-      return 'Weighted composite (Savings Rate + Spend Discipline + Balance Runway)';
+      return 'Based on your savings, spending habits, and account balance';
     default:
       return '';
   }
@@ -301,7 +307,7 @@ class _DpcMetricDefinitionSheet extends StatelessWidget {
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      'FINANCIAL TELEMETRY METRIC',
+                      'SPENDING INSIGHT',
                       style: TextStyle(
                         color: DpcColors.textMuted,
                         fontSize: 10,
@@ -781,19 +787,25 @@ class CategorySpendItem {
 /// Purged of AI-slop neon saturation in favor of balanced Scandinavian/architectural harmony
 Color getCategorySpendColor(String category) {
   final cat = category.toLowerCase().trim();
-  if (cat.contains('food') || cat.contains('dining') || cat.contains('cafe') || cat.contains('grocer')) {
+  if (cat.contains('food') || cat.contains('dining') || cat.contains('cafe') || cat.contains('eat') || cat.contains('snack')) {
     return const Color(0xFFC88A58); // Matte Terracotta Clay
+  } else if (cat.contains('grocer')) {
+    return const Color(0xFF6F997A); // Soft Sage Green
   } else if (cat.contains('shop') || cat.contains('lifestyle') || cat.contains('entertainment')) {
     return const Color(0xFF988BA2); // Dusty Heather / Slate Mauve
-  } else if (cat.contains('travel') || cat.contains('commute') || cat.contains('transport')) {
+  } else if (cat.contains('travel') || cat.contains('commute') || cat.contains('transport') || cat.contains('fuel')) {
     return const Color(0xFF68879B); // Nordic Steel Blue
-  } else if (cat.contains('bill') || cat.contains('essential') || cat.contains('utilit')) {
+  } else if (cat.contains('bill') || cat.contains('essential') || cat.contains('utilit') || cat.contains('recharge')) {
     return const Color(0xFFBAA174); // Warm Flax / Muted Ochre
-  } else if (cat.contains('invest') || cat.contains('transfer') || cat.contains('upi')) {
+  } else if (cat.contains('invest') || cat.contains('transfer') || cat.contains('upi') || cat.contains('people') || cat.contains('person')) {
     return const Color(0xFF749882); // Soft Sage / Eucalypt
-  } else if (cat.contains('income') || cat.contains('salary')) {
+  } else if (cat.contains('bank') || cat.contains('charge') || cat.contains('fee')) {
+    return const Color(0xFFA57D6D); // Muted Copper / Editorial Rust
+  } else if (cat.contains('stall') || cat.contains('local')) {
+    return const Color(0xFF8DA399); // Muted Moss Slate
+  } else if (cat.contains('income') || cat.contains('salary') || cat.contains('interest')) {
     return const Color(0xFF82A38E); // Quiet Willow / Muted Mint
-  } else if (cat.contains('uncategorized')) {
+  } else if (cat.contains('uncategorized') || cat.contains('unclear')) {
     return const Color(0xFF6E7681); // Muted Zinc Graphite
   }
   return const Color(0xFF949BA3); // Titanium Nickel for custom categories
@@ -802,18 +814,30 @@ Color getCategorySpendColor(String category) {
 /// Helper returning standard icons for categories
 IconData getCategorySpendIcon(String category) {
   final cat = category.toLowerCase().trim();
-  if (cat.contains('food') || cat.contains('dining') || cat.contains('cafe') || cat.contains('grocer')) {
+  if (cat.contains('food') || cat.contains('dining') || cat.contains('cafe') || cat.contains('eat') || cat.contains('snack')) {
     return Icons.restaurant_rounded;
+  } else if (cat.contains('grocer')) {
+    return Icons.local_grocery_store_rounded;
   } else if (cat.contains('shop') || cat.contains('lifestyle') || cat.contains('entertainment')) {
     return Icons.shopping_bag_rounded;
   } else if (cat.contains('travel') || cat.contains('commute') || cat.contains('transport')) {
     return Icons.directions_car_rounded;
-  } else if (cat.contains('bill') || cat.contains('essential') || cat.contains('utilit')) {
-    return Icons.bolt_rounded;
+  } else if (cat.contains('fuel')) {
+    return Icons.local_gas_station_rounded;
+  } else if (cat.contains('bill') || cat.contains('essential') || cat.contains('utilit') || cat.contains('recharge')) {
+    return Icons.receipt_long_rounded;
+  } else if (cat.contains('people') || cat.contains('person')) {
+    return Icons.people_alt_rounded;
   } else if (cat.contains('invest') || cat.contains('transfer') || cat.contains('upi')) {
     return Icons.trending_up_rounded;
-  } else if (cat.contains('income') || cat.contains('salary')) {
+  } else if (cat.contains('bank') || cat.contains('charge') || cat.contains('fee')) {
+    return Icons.account_balance_rounded;
+  } else if (cat.contains('stall') || cat.contains('local')) {
+    return Icons.store_rounded;
+  } else if (cat.contains('income') || cat.contains('salary') || cat.contains('interest')) {
     return Icons.account_balance_wallet_rounded;
+  } else if (cat.contains('unclear')) {
+    return Icons.help_outline_rounded;
   } else if (cat.contains('uncategorized')) {
     return Icons.label_off_rounded;
   }
@@ -910,26 +934,27 @@ class DpcCategorySpendCard extends StatelessWidget {
           ),
           const SizedBox(height: 14),
 
-          // Donut Ring Chart Centerpiece (Generous, balanced precision gauge)
+          // Donut Ring Chart Centerpiece (Enlarged prominent centerpiece)
           Center(
             child: SizedBox(
-              width: 164,
-              height: 164,
+              width: 224,
+              height: 224,
               child: Stack(
                 alignment: Alignment.center,
                 children: [
                   CustomPaint(
-                    size: const Size(156, 156),
+                    size: const Size(216, 216),
                     painter: _CategoryDonutPainter(
                       items: items,
                       totalSpent: totalSpent,
+                      strokeWidth: 15.0,
                     ),
                   ),
                   Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       Container(
-                        constraints: const BoxConstraints(maxWidth: 114),
+                        constraints: const BoxConstraints(maxWidth: 150),
                         child: FittedBox(
                           fit: BoxFit.scaleDown,
                           child: Text(
@@ -938,21 +963,21 @@ class DpcCategorySpendCard extends StatelessWidget {
                                 : '₹0',
                             style: const TextStyle(
                               color: DpcColors.textPrimary,
-                              fontSize: 18,
+                              fontSize: 24,
                               fontWeight: FontWeight.w800,
-                              letterSpacing: -0.5,
+                              letterSpacing: -0.6,
                             ),
                           ),
                         ),
                       ),
-                      const SizedBox(height: 2),
+                      const SizedBox(height: 3),
                       Text(
                         items.isNotEmpty
                             ? '${items.length} categories'
                             : periodLabel,
                         style: const TextStyle(
                           color: DpcColors.textSecondary,
-                          fontSize: 10.5,
+                          fontSize: 12,
                           fontWeight: FontWeight.w500,
                         ),
                       ),
@@ -962,7 +987,7 @@ class DpcCategorySpendCard extends StatelessWidget {
               ),
             ),
           ),
-          const SizedBox(height: 14),
+          const SizedBox(height: 18),
 
           // Category Breakdown List
           if (items.isEmpty || totalSpent <= 0) ...[
@@ -1095,22 +1120,24 @@ class DpcCategorySpendCard extends StatelessWidget {
 class _CategoryDonutPainter extends CustomPainter {
   final List<CategorySpendItem> items;
   final double totalSpent;
+  final double strokeWidth;
 
   _CategoryDonutPainter({
     required this.items,
     required this.totalSpent,
+    this.strokeWidth = 15.0,
   });
 
   @override
   void paint(Canvas canvas, Size size) {
     final center = Offset(size.width / 2, size.height / 2);
-    final radius = (size.width - 14) / 2;
+    final radius = (size.width - strokeWidth) / 2;
 
     // Draw background track ring
     final trackPaint = Paint()
       ..color = DpcColors.surfaceBorder
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 11.0;
+      ..strokeWidth = strokeWidth;
 
     canvas.drawCircle(center, radius, trackPaint);
 
@@ -1128,7 +1155,7 @@ class _CategoryDonutPainter extends CustomPainter {
       final paint = Paint()
         ..color = item.color
         ..style = PaintingStyle.stroke
-        ..strokeWidth = 11.0
+        ..strokeWidth = strokeWidth
         ..strokeCap = StrokeCap.butt;
 
       canvas.drawArc(rect, startAngle + (gapAngle / 2), actualSweep, false, paint);
@@ -1138,6 +1165,8 @@ class _CategoryDonutPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _CategoryDonutPainter oldDelegate) {
-    return oldDelegate.totalSpent != totalSpent || oldDelegate.items != items;
+    return oldDelegate.totalSpent != totalSpent ||
+        oldDelegate.items != items ||
+        oldDelegate.strokeWidth != strokeWidth;
   }
 }

@@ -46,3 +46,21 @@ final recurringCommitmentsProvider = FutureProvider<List<Map<String, dynamic>>>(
   return dbService.fetchRecurringCommitments(user.id);
 });
 
+/// Riverpod provider for fetching the user's computed habit profile and behavioral archetype
+final habitProfileProvider = FutureProvider<Map<String, dynamic>?>((ref) async {
+  final user = ref.watch(currentUserProvider);
+  if (user == null) return null;
+  ref.watch(transactionFeedProvider);
+  final dbService = ref.watch(supabaseDbServiceProvider);
+  return dbService.fetchHabitProfile(user.id);
+});
+
+/// Riverpod provider for fetching verified bank balance facts via get_current_balance
+final balanceProvider = FutureProvider<Map<String, dynamic>?>((ref) async {
+  final user = ref.watch(currentUserProvider);
+  if (user == null) return null;
+  ref.watch(transactionFeedProvider);
+  final dbService = ref.watch(supabaseDbServiceProvider);
+  return dbService.fetchCurrentBalance();
+});
+

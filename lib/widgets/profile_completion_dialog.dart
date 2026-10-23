@@ -803,8 +803,8 @@ class _ProfileCompletionDialogState
                     children: [
                       Text(
                         _selectedIncomeType == 'Freelancer'
-                            ? 'Estimated Monthly Baseline'
-                            : 'Expected Monthly Inflow',
+                            ? 'Estimated Monthly Earnings'
+                            : 'Expected Monthly Income',
                         style: const TextStyle(
                           color: Colors.white70,
                           fontSize: 12,
@@ -834,8 +834,8 @@ class _ProfileCompletionDialogState
                   const SizedBox(height: 4),
                   Text(
                     _selectedIncomeType == 'Freelancer'
-                        ? 'Conservative monthly average used to protect against cash crunches.'
-                        : 'Helps project upcoming cashflow before your salary or allowance credits.',
+                        ? 'Your rough monthly average, so we can plan your budget safely.'
+                        : 'Helps calculate your daily spending limit before your next paycheck arrives.',
                     style: const TextStyle(
                       color: DpcColors.textMuted,
                       fontSize: 11,

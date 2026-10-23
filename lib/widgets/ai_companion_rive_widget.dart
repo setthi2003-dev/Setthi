@@ -34,6 +34,7 @@ class AiCompanionRiveWidget extends StatefulWidget {
 
 class _AiCompanionRiveWidgetState extends State<AiCompanionRiveWidget> {
   static FileLoader? _sharedLoader;
+  static bool debugForceRive = false;
 
   static FileLoader get _loader {
     _sharedLoader ??= FileLoader.fromAsset(
@@ -44,6 +45,7 @@ class _AiCompanionRiveWidgetState extends State<AiCompanionRiveWidget> {
   }
 
   bool get _isTestEnv {
+    if (debugForceRive) return false;
     if (kIsWeb) return false;
     try {
       return Platform.environment.containsKey('FLUTTER_TEST');
@@ -59,9 +61,6 @@ class _AiCompanionRiveWidgetState extends State<AiCompanionRiveWidget> {
   Widget build(BuildContext context) {
     final w = _effectiveWidth;
     final h = _effectiveHeight;
-    final scale = widget.zoomScale;
-    final shiftX = -0.14833 * w * scale;
-    final shiftY = -0.21333 * h * scale;
 
     if (_isTestEnv) {
       return SizedBox(
@@ -77,6 +76,18 @@ class _AiCompanionRiveWidgetState extends State<AiCompanionRiveWidget> {
         ),
       );
     }
+
+    // Artboard dimensions: 595.0 x 669.0.
+    // True character circular bounds: diameter 348.0, center at (397.5, 477.5).
+    // Scaling to s * 0.98 ensures the mascot and its 360-degree colorful gradient ring
+    // fill the circular container edge-to-edge with zero awkward padding or clipping.
+    final s = w < h ? w : h;
+    final targetDiameter = s * 0.98;
+    final k = targetDiameter / 348.0;
+    final artboardW = 595.0 * k;
+    final artboardH = 669.0 * k;
+    final left = (w / 2.0) - (397.5 * k);
+    final top = (h / 2.0) - (477.5 * k);
 
     return SizedBox(
       key: const Key('ai_companion_rive_widget'),
@@ -116,18 +127,29 @@ class _AiCompanionRiveWidgetState extends State<AiCompanionRiveWidget> {
                   ),
                 );
               case RiveLoaded():
-                return Transform.translate(
-                  offset: widget.autoCenter
-                      ? Offset(shiftX, shiftY)
-                      : Offset.zero,
-                  child: Transform.scale(
-                    scale: widget.autoCenter ? scale : 1.0,
-                    child: RiveWidget(
-                      controller: state.controller,
-                      fit: widget.fit,
-                      alignment: widget.alignment,
-                    ),
-                  ),
+                if (widget.autoCenter) {
+                  return Stack(
+                    clipBehavior: Clip.none,
+                    children: [
+                      Positioned(
+                        left: left,
+                        top: top,
+                        width: artboardW,
+                        height: artboardH,
+                        child: RiveWidget(
+                          controller: state.controller,
+                          fit: Fit.fill,
+                          alignment: Alignment.center,
+                        ),
+                      ),
+                    ],
+                  );
+                }
+
+                return RiveWidget(
+                  controller: state.controller,
+                  fit: widget.fit,
+                  alignment: widget.alignment,
                 );
             }
           },

@@ -512,7 +512,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen>
                     ),
                     const SizedBox(height: 6),
                     const Text(
-                      'Next-Gen Financial Intelligence',
+                      'Your Personal Finance Assistant',
                       style: TextStyle(
                         color: DpcColors.textSecondary,
                         fontSize: 13,

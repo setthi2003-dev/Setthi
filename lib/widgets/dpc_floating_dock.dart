@@ -9,8 +9,9 @@ class DpcFloatingNavDock extends StatelessWidget {
   final int activeIndex;
   final VoidCallback? onAiTap;
   final VoidCallback? onTelemetryTap;
-  final VoidCallback onHomeTap;
-  final VoidCallback onBankTap;
+  final VoidCallback? onHomeTap;
+  final VoidCallback? onTransactionsTap;
+  final VoidCallback? onBankTap;
   final VoidCallback? onProfileTap;
   final VoidCallback? onSyncTap;
   final VoidCallback? onAiChatTap;
@@ -19,11 +20,12 @@ class DpcFloatingNavDock extends StatelessWidget {
 
   const DpcFloatingNavDock({
     super.key,
-    this.activeIndex = 2,
+    this.activeIndex = 0,
     this.onAiTap,
     this.onTelemetryTap,
-    required this.onHomeTap,
-    required this.onBankTap,
+    this.onHomeTap,
+    this.onTransactionsTap,
+    this.onBankTap,
     this.onProfileTap,
     this.onSyncTap,
     this.onAiChatTap,
@@ -35,7 +37,8 @@ class DpcFloatingNavDock extends StatelessWidget {
   Widget build(BuildContext context) {
     final isAiActive = activeIndex == 0;
     final isTelemetryActive = activeIndex == 1;
-    final isHomeActive = activeIndex == 2;
+    final isTransactionsActive = activeIndex == 2;
+    // ignore: unused_local_variable
     final isBankActive = activeIndex == 3;
     final isProfileActive = activeIndex == 4;
 
@@ -75,19 +78,21 @@ class DpcFloatingNavDock extends StatelessWidget {
             ),
           ),
 
-          // 2. Telemetry & Analytics Page
+          // 2. Spending Insights & Activity Page (Merged)
           Tooltip(
-            message: 'Telemetry & Analytics',
+            message: 'Insights & Activity',
             child: InkWell(
-              onTap: onTelemetryTap,
+              onTap: onTelemetryTap ?? onTransactionsTap ?? onHomeTap,
               borderRadius: BorderRadius.circular(16),
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 200),
                 padding: const EdgeInsets.all(10),
                 decoration: BoxDecoration(
-                  color: isTelemetryActive ? DpcColors.surfaceElevated : Colors.transparent,
+                  color: (isTelemetryActive || isTransactionsActive)
+                      ? DpcColors.surfaceElevated
+                      : Colors.transparent,
                   borderRadius: BorderRadius.circular(16),
-                  border: isTelemetryActive
+                  border: (isTelemetryActive || isTransactionsActive)
                       ? Border.all(
                           color: DpcColors.surfaceBorder,
                           width: 1,
@@ -97,7 +102,7 @@ class DpcFloatingNavDock extends StatelessWidget {
                 child: Icon(
                   Icons.insights_rounded,
                   size: 20,
-                  color: isTelemetryActive
+                  color: (isTelemetryActive || isTransactionsActive)
                       ? DpcColors.textPrimary
                       : DpcColors.textSecondary,
                 ),
@@ -105,66 +110,37 @@ class DpcFloatingNavDock extends StatelessWidget {
             ),
           ),
 
-          // 3. Present Homepage with Total Balance
-          Tooltip(
-            message: 'Home & Balance',
-            child: InkWell(
-              onTap: onHomeTap,
-              borderRadius: BorderRadius.circular(16),
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 200),
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: isHomeActive ? DpcColors.surfaceElevated : Colors.transparent,
-                  borderRadius: BorderRadius.circular(16),
-                  border: isHomeActive
-                      ? Border.all(
-                          color: DpcColors.surfaceBorder,
-                          width: 1,
-                        )
-                      : null,
-                ),
-                child: Icon(
-                  Icons.home_rounded,
-                  size: 20,
-                  color: isHomeActive
-                      ? DpcColors.textPrimary
-                      : DpcColors.textSecondary,
-                ),
-              ),
-            ),
-          ),
-
+          // [COMMENTED OUT FROM UI - DO NOT REMOVE]
           // 4. Link Bank / Accounts (forth page as it is)
-          Tooltip(
-            message: hasActiveConsent ? 'Bank Feed Active' : 'Link Bank',
-            child: InkWell(
-              onTap: onBankTap,
-              borderRadius: BorderRadius.circular(16),
-              child: Container(
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: isBankActive ? DpcColors.surfaceElevated : Colors.transparent,
-                  borderRadius: BorderRadius.circular(16),
-                  border: isBankActive
-                      ? Border.all(
-                          color: DpcColors.surfaceBorder,
-                          width: 1,
-                        )
-                      : null,
-                ),
-                child: Icon(
-                  hasActiveConsent
-                      ? Icons.verified_rounded
-                      : Icons.account_balance_rounded,
-                  size: 20,
-                  color: isBankActive
-                      ? DpcColors.textPrimary
-                      : (hasActiveConsent ? DpcColors.textPrimary : DpcColors.textSecondary),
-                ),
-              ),
-            ),
-          ),
+          // Tooltip(
+          //   message: hasActiveConsent ? 'Bank Feed Active' : 'Link Bank',
+          //   child: InkWell(
+          //     onTap: onBankTap,
+          //     borderRadius: BorderRadius.circular(16),
+          //     child: Container(
+          //       padding: const EdgeInsets.all(10),
+          //       decoration: BoxDecoration(
+          //         color: isBankActive ? DpcColors.surfaceElevated : Colors.transparent,
+          //         borderRadius: BorderRadius.circular(16),
+          //         border: isBankActive
+          //             ? Border.all(
+          //                 color: DpcColors.surfaceBorder,
+          //                 width: 1,
+          //               )
+          //             : null,
+          //       ),
+          //       child: Icon(
+          //         hasActiveConsent
+          //             ? Icons.verified_rounded
+          //             : Icons.account_balance_rounded,
+          //         size: 20,
+          //         color: isBankActive
+          //             ? DpcColors.textPrimary
+          //             : (hasActiveConsent ? DpcColors.textPrimary : DpcColors.textSecondary),
+          //       ),
+          //     ),
+          //   ),
+          // ),
 
           // 5. Profile Button (fifth page as it is)
           if (onProfileTap != null)

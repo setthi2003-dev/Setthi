@@ -11,7 +11,6 @@ import 'package:setthi/main.dart';
 import 'package:setthi/screens/auth_screen.dart';
 import 'package:setthi/screens/verify_email_screen.dart';
 import 'package:setthi/screens/reset_password_screen.dart';
-import 'package:setthi/screens/transaction_feed_screen.dart';
 import 'package:setthi/models/merchant_category_model.dart';
 import 'package:setthi/models/transaction_group_model.dart';
 import 'package:setthi/models/transaction_model.dart';
@@ -440,8 +439,8 @@ void main() {
       final feed = await container.read(transactionFeedProvider.future);
       expect(feed, isA<List<BankTransaction>>());
 
-      final balance = container.read(latestBalanceProvider);
-      expect(balance, isA<double>());
+      final balance = container.read(balanceProvider);
+      expect(balance, isA<AsyncValue<Map<String, dynamic>?>>());
     });
 
     test('Auth providers resolve unauthenticated by default', () {
@@ -479,7 +478,7 @@ void main() {
       );
 
       expect(find.text('Setthi'), findsOneWidget);
-      expect(find.text('Next-Gen Financial Intelligence'), findsOneWidget);
+      expect(find.text('Your Personal Finance Assistant'), findsOneWidget);
       expect(find.text('Sign In'), findsOneWidget);
       expect(find.text('Create Account'), findsOneWidget);
       expect(find.text('Continue with Google'), findsOneWidget);
@@ -601,8 +600,8 @@ void main() {
       expect(find.text('Password is required'), findsOneWidget);
 
       // Tap on the screen background/header
-      await tester.ensureVisible(find.text('Next-Gen Financial Intelligence'));
-      await tester.tap(find.text('Next-Gen Financial Intelligence'));
+      await tester.ensureVisible(find.text('Your Personal Finance Assistant'));
+      await tester.tap(find.text('Your Personal Finance Assistant'));
       await tester.pumpAndSettle();
 
       // Errors must vanish immediately
@@ -650,14 +649,18 @@ void main() {
         ),
       );
 
-      expect(find.text('Setthi'), findsOneWidget);
+      expect(find.text('Setthi AI'), findsWidgets);
 
       await tester.pump(const Duration(milliseconds: 100));
       await tester.pumpAndSettle();
 
+      // Navigate to Spending Insights screen from initial Setthi AI screen
+      await tester.tap(find.byIcon(Icons.insights_rounded));
+      await tester.pumpAndSettle();
+
       expect(find.byType(DpcHeroCarousel), findsNothing);
-      expect(find.text('TOTAL AVAILABLE BALANCE'), findsOneWidget);
-      expect(find.text('No Bank Account Linked'), findsOneWidget);
+      expect(find.text('BALANCE'), findsWidgets);
+      expect(find.text('No Bank Account Linked'), findsNothing);
     });
 
     testWidgets('VerifyEmailScreen renders 6-digit input boxes and action button', (WidgetTester tester) async {
@@ -745,7 +748,7 @@ void main() {
       expect(find.text('Passwords do not match'), findsOneWidget);
     });
 
-    testWidgets('DpcFloatingNavDock renders quick actions and handles link bank tap', (WidgetTester tester) async {
+    testWidgets('DpcFloatingNavDock renders quick actions and handles navigation', (WidgetTester tester) async {
       await tester.pumpWidget(
         ProviderScope(
           overrides: [
@@ -757,33 +760,28 @@ void main() {
 
       await tester.pumpAndSettle();
 
-      // Verify Dock items: Home, Sync, Link Bank, Profile
-      expect(find.byIcon(Icons.home_rounded), findsOneWidget);
-      expect(find.byIcon(Icons.sync_rounded), findsOneWidget);
-      final dockLinkBank = find.descendant(
-        of: find.byType(DpcFloatingNavDock),
-        matching: find.byIcon(Icons.account_balance_rounded),
+      // Verify Dock items: AI, Insights & Activity, Profile
+      expect(
+        find.descendant(
+          of: find.byType(DpcFloatingNavDock),
+          matching: find.byType(AiCompanionRiveWidget),
+        ),
+        findsOneWidget,
       );
-      expect(dockLinkBank, findsOneWidget);
-
-      // Tap 'Link Bank' action on floating dock to open link bank bottom sheet
-      await tester.tap(dockLinkBank);
-      await tester.pumpAndSettle();
-
-      // Verify Setu AA Consent Flow bottom sheet opened
-      expect(find.text('Link Bank via Account Aggregator'), findsOneWidget);
-      expect(find.text('Setu AA ReBIT Gateway (RBI Regulated)'), findsOneWidget);
-
-      // Close bottom sheet
-      Navigator.of(tester.element(find.text('Link Bank via Account Aggregator'))).pop();
-      await tester.pumpAndSettle();
-
-      // Tap Profile icon in floating dock to navigate to dedicated Profile Page
+      expect(
+        find.descendant(
+          of: find.byType(DpcFloatingNavDock),
+          matching: find.byIcon(Icons.insights_rounded),
+        ),
+        findsOneWidget,
+      );
       final dockProfile = find.descendant(
         of: find.byType(DpcFloatingNavDock),
         matching: find.byIcon(Icons.person_outline_rounded),
       );
       expect(dockProfile, findsOneWidget);
+
+      // Tap Profile icon in floating dock to navigate to dedicated Profile Page
       await tester.tap(dockProfile);
       await tester.pumpAndSettle();
 
@@ -793,7 +791,7 @@ void main() {
       expect(find.text('Sign Out'), findsOneWidget);
     });
 
-    testWidgets('DpcFloatingNavDock supports 5 navbar pages: AI, Telemetry, Home Balance, Bank, Profile', (WidgetTester tester) async {
+    testWidgets('DpcFloatingNavDock supports navbar pages: AI, Telemetry, Home Balance, Profile', (WidgetTester tester) async {
       tester.view.physicalSize = const Size(800, 1800);
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.resetPhysicalSize);
@@ -811,25 +809,17 @@ void main() {
 
       await tester.pumpAndSettle();
 
-      // Starts on Page 3: Present homepage with total balance
-      expect(find.text('TOTAL AVAILABLE BALANCE'), findsOneWidget);
+      // Starts on primary Page 0: Setthi AI Chat
+      expect(find.text('Setthi AI'), findsWidgets);
 
-      // Verify all 5 navbar buttons exist in the dock
+      // Verify navbar buttons exist in the dock
       final dockAi = find.descendant(
         of: find.byType(DpcFloatingNavDock),
-        matching: find.byIcon(Icons.auto_awesome_rounded),
+        matching: find.byType(AiCompanionRiveWidget),
       );
-      final dockTelemetry = find.descendant(
+      final dockInsights = find.descendant(
         of: find.byType(DpcFloatingNavDock),
         matching: find.byIcon(Icons.insights_rounded),
-      );
-      final dockHome = find.descendant(
-        of: find.byType(DpcFloatingNavDock),
-        matching: find.byIcon(Icons.home_rounded),
-      );
-      final dockBank = find.descendant(
-        of: find.byType(DpcFloatingNavDock),
-        matching: find.byIcon(Icons.account_balance_rounded),
       );
       final dockProfile = find.descendant(
         of: find.byType(DpcFloatingNavDock),
@@ -837,35 +827,23 @@ void main() {
       );
 
       expect(dockAi, findsOneWidget);
-      expect(dockTelemetry, findsOneWidget);
-      expect(dockHome, findsOneWidget);
-      expect(dockBank, findsOneWidget);
+      expect(dockInsights, findsOneWidget);
       expect(dockProfile, findsOneWidget);
 
-      // 1. Tap Page 1 (AI)
-      await tester.tap(dockAi);
-      await tester.pumpAndSettle();
-
-      expect(find.text('Setthi AI'), findsWidgets);
+      // 1. Enter text in Setthi AI Chat
       expect(find.text('Smart Finance Companion'), findsOneWidget);
       expect(find.byType(TextField), findsOneWidget);
       await tester.enterText(find.byType(TextField), 'How much did I spend?');
       expect(find.text('How much did I spend?'), findsOneWidget);
 
-      // 2. Tap Page 2 (Telemetry & Analytics)
-      await tester.tap(dockTelemetry);
+      // 2. Tap Page 1 (Spending Insights & Activity - Merged)
+      await tester.tap(dockInsights);
       await tester.pumpAndSettle();
 
-      expect(find.text('Telemetry & Analytics'), findsOneWidget);
-      expect(find.text('UPI Transfers'), findsOneWidget);
+      expect(find.text('STATEMENT BREAKDOWN'), findsNothing);
+      expect(find.text('BALANCE'), findsWidgets);
 
-      // 3. Tap Page 3 (Present homepage with total balance)
-      await tester.tap(dockHome);
-      await tester.pumpAndSettle();
-
-      expect(find.text('TOTAL AVAILABLE BALANCE'), findsOneWidget);
-
-      // 4. Tap Page 5 (Profile & Account)
+      // 3. Tap Page 2 (Profile & Account)
       await tester.tap(dockProfile);
       await tester.pumpAndSettle();
 
@@ -1115,6 +1093,10 @@ void main() {
 
       await tester.pumpAndSettle();
 
+      // Navigate to Spending Insights & Activity screen from default AI screen
+      await tester.tap(find.byIcon(Icons.insights_rounded));
+      await tester.pumpAndSettle();
+
       // Verify Sort Order Pill is present (initially shows 'Latest')
       expect(find.text('Latest'), findsOneWidget);
 
@@ -1266,8 +1248,12 @@ void main() {
 
       await tester.pumpAndSettle();
 
-      // Find the "Tag" chip in the feed row
-      final tagChip = find.text('Tag');
+      // Navigate to Spending Insights & Activity screen from initial AI screen
+      await tester.tap(find.byIcon(Icons.insights_rounded));
+      await tester.pumpAndSettle();
+
+      // Find the category chip in the feed row
+      final tagChip = find.text('Not categorised');
       expect(tagChip, findsOneWidget);
 
       // Tap the "Tag" chip to open the category picker sheet
@@ -1279,8 +1265,8 @@ void main() {
       expect(find.text('- ₹450 Debited'), findsOneWidget);
 
       // Curated category presets should be visible
-      expect(find.text('Food & Dining'), findsOneWidget);
-      expect(find.text('Shopping & Lifestyle'), findsOneWidget);
+      expect(find.text('Eating out, tea & snacks'), findsOneWidget);
+      expect(find.text('Groceries & daily needs'), findsOneWidget);
 
       // Verify no auto-tag toggle switch is rendered
       expect(find.byType(Switch), findsNothing);
@@ -1331,7 +1317,11 @@ void main() {
 
       await tester.pumpAndSettle();
 
-      final tagChip = find.text('Tag');
+      // Navigate to Spending Insights & Activity screen from initial AI screen
+      await tester.tap(find.byIcon(Icons.insights_rounded));
+      await tester.pumpAndSettle();
+
+      final tagChip = find.text('Not categorised');
       expect(tagChip, findsOneWidget);
 
       await tester.tap(tagChip);
@@ -1345,7 +1335,7 @@ void main() {
       expect(find.byType(Switch), findsNothing);
 
       // Tap a preset category
-      await tester.tap(find.text('Food & Dining'));
+      await tester.tap(find.text('Eating out, tea & snacks'));
       await tester.pumpAndSettle();
 
       // Modal is dismissed
@@ -1382,8 +1372,12 @@ void main() {
 
       await tester.pumpAndSettle();
 
-      // Tap Tag chip
-      final tagChip = find.text('Tag');
+      // Navigate to Spending Insights & Activity screen from initial AI screen
+      await tester.tap(find.byIcon(Icons.insights_rounded));
+      await tester.pumpAndSettle();
+
+      // Tap Not categorised chip
+      final tagChip = find.text('Not categorised');
       expect(tagChip, findsOneWidget);
       await tester.tap(tagChip);
       await tester.pumpAndSettle();
@@ -1552,9 +1546,9 @@ void main() {
       await tester.pumpAndSettle();
 
       // Tap navbar item 0 (AI page)
-      final navAiTab = find.byIcon(Icons.auto_awesome_rounded);
-      expect(navAiTab, findsWidgets);
-      await tester.tap(navAiTab.first);
+      final navAiTab = find.byTooltip('Setthi AI');
+      expect(navAiTab, findsOneWidget);
+      await tester.tap(navAiTab);
       await tester.pumpAndSettle();
 
       // Find delete conversation sweep button in AppBar
@@ -1628,7 +1622,7 @@ void main() {
 
       // Empty state quick prompts should be visible
       expect(find.text('How much did I spend this week?'), findsOneWidget);
-      expect(find.text('What is my current balance?'), findsOneWidget);
+      expect(find.text('What are my recurring bills?'), findsOneWidget);
       expect(find.text('Top 3 food orders lately'), findsOneWidget);
 
       // Input field should be present and enabled
@@ -1690,7 +1684,7 @@ void main() {
       await tester.pumpAndSettle();
 
       // Trigger prompt
-      await tester.tap(find.text('What is my current balance?'));
+      await tester.tap(find.text('What are my recurring bills?'));
       await tester.pumpAndSettle();
 
       // Verify the formatted text does NOT have raw **
@@ -1725,6 +1719,10 @@ void main() {
         ),
       );
 
+      await tester.pumpAndSettle();
+
+      // Navigate to Spending Insights & Activity screen
+      await tester.tap(find.byIcon(Icons.insights_rounded));
       await tester.pumpAndSettle();
 
       // Scroll to bottom
@@ -1773,6 +1771,10 @@ void main() {
 
       await tester.pumpAndSettle();
 
+      // Navigate to Spending Insights & Activity screen
+      await tester.tap(find.byIcon(Icons.insights_rounded));
+      await tester.pumpAndSettle();
+
       // Drag down towards bottom
       for (int i = 0; i < 6; i++) {
         await tester.drag(find.byType(CustomScrollView), const Offset(0, -600));
@@ -1806,12 +1808,20 @@ void main() {
           overrides: [
             isAuthenticatedProvider.overrideWithValue(true),
             transactionFeedProvider.overrideWith(() => _FakeFeedNotifier(dummyTxns)),
-            latestBalanceProvider.overrideWithValue(50000.00),
+            balanceProvider.overrideWith((ref) => Future.value({
+                  'verified': true,
+                  'current_balance': 50000.00,
+                  'as_of_date': '2026-10-06',
+                })),
           ],
           child: const SetthiApp(),
         ),
       );
 
+      await tester.pumpAndSettle();
+
+      // Navigate to Spending Insights & Activity screen
+      await tester.tap(find.byIcon(Icons.insights_rounded));
       await tester.pumpAndSettle();
 
       // Ambient AI Briefing badge & conversational bar should NOT be present on the homepage
@@ -1820,8 +1830,8 @@ void main() {
       expect(find.text('Ask Setthi about runway, balances, or spends...'), findsNothing);
       expect(find.text('How long is my runway? ⚡'), findsNothing);
 
-      // Homepage cleanly shows Total Available Balance and Transaction list
-      expect(find.text('TOTAL AVAILABLE BALANCE'), findsOneWidget);
+      // Cleanly shows Balance and Transaction list
+      expect(find.text('BALANCE'), findsWidgets);
       expect(find.text('Swiggy'), findsOneWidget);
     });
 
@@ -1974,11 +1984,13 @@ void main() {
         'discretionary_ratio': 0.18,
         'daily_velocity': 720.0,
         'total_spent': 5040.0,
+        'total_outflow': 5040.0,
         'total_inflow': 11200.0,
+        'net_change': 6160.0,
         'channel_distribution': [
-          {'mode': 'UPI', 'percentage': 85.0},
-          {'mode': 'ATM', 'percentage': 10.0},
-          {'mode': 'CARD', 'percentage': 5.0},
+          {'mode': 'UPI', 'percentage': 85.0, 'amount': 4284.0},
+          {'mode': 'ATM', 'percentage': 10.0, 'amount': 504.0},
+          {'mode': 'CARD', 'percentage': 5.0, 'amount': 252.0},
         ],
         'weekly_outflow_velocity': [
           {'week': 1, 'label': 'Week 1', 'amount': 1200.0},
@@ -2003,6 +2015,7 @@ void main() {
           overrides: [
             isAuthenticatedProvider.overrideWithValue(true),
             transactionFeedProvider.overrideWith(() => _FakeFeedNotifier([])),
+            homeTelemetry7dProvider.overrideWith((ref) => mockMetrics),
             telemetryMetricsProvider.overrideWith((ref) => mockMetrics),
           ],
           child: const SetthiApp(),
@@ -2011,120 +2024,35 @@ void main() {
 
       await tester.pumpAndSettle();
 
-      // Verify category spend breakdown card is rendered on Home page below total balance
-      expect(find.text('SPEND BY CATEGORY'), findsOneWidget);
-      expect(find.text('Category Outflows'), findsOneWidget);
-      expect(find.text('Food & Dining'), findsOneWidget);
-      expect(find.text('Bills & Essentials'), findsOneWidget);
-      expect(find.text('Shopping & Lifestyle'), findsOneWidget);
-
-      // Switch to Telemetry screen via floating navigation dock
-      await tester.tap(find.byTooltip('Telemetry & Analytics'));
+      // Switch to Spending Insights screen via floating navigation dock
+      await tester.tap(find.byIcon(Icons.insights_rounded));
       await tester.pumpAndSettle();
 
-      // Verify category spend breakdown card is relocated and absent on Telemetry screen
-      expect(find.text('SPEND BY CATEGORY'), findsNothing);
-
-      // Verify real calculated financial health score is displayed
-      expect(find.text('88%'), findsOneWidget);
-
-      // Verify real calculated discretionary ratio is displayed
-      expect(find.text('18%'), findsOneWidget);
-
-      // Verify channel percentages are displayed
-      expect(find.text('85% vol'), findsOneWidget);
-      expect(find.text('10% vol'), findsOneWidget);
-      expect(find.text('5% vol'), findsOneWidget);
+      // Verify statement breakdown card is removed and single category spend list is present on Spending Insights screen
+      expect(find.text('STATEMENT BREAKDOWN'), findsNothing);
+      expect(find.text('Money out'), findsNothing);
+      expect(find.text('Money in'), findsNothing);
+      expect(find.text('PAYMENT METHODS'), findsNothing);
+      // Verify SPENDING BY CATEGORY is commented out from UI
+      expect(find.text('SPENDING BY CATEGORY'), findsNothing);
     });
-    test('weeklyStatsProvider accurately differentiates between live and historical statement dates', () async {
+    test('balanceProvider delivers verified balance map from backend', () async {
       final container = ProviderContainer(
         overrides: [
-          // 1. Live transactions scenario (today)
-          transactionFeedProvider.overrideWith(
-            () => _FakeLiveFeedNotifier([
-              BankTransaction(
-                txnId: 'live-1',
-                amount: 1500.0,
-                type: TransactionType.debit,
-                mode: 'UPI',
-                currentBalance: 50000.0,
-                transactionTimestamp: DateTime.now().subtract(const Duration(hours: 4)),
-                createdAt: DateTime(2026, 10, 3, 12, 0, 0),
-                narration: 'UPI/Swiggy/swiggy@icici',
-              ),
-              BankTransaction(
-                txnId: 'live-2',
-                amount: 10000.0,
-                type: TransactionType.credit,
-                mode: 'IMPS',
-                currentBalance: 51500.0,
-                transactionTimestamp: DateTime.now().subtract(const Duration(days: 1)),
-                createdAt: DateTime(2026, 10, 2, 10, 0, 0),
-                narration: 'IMPS/Salary',
-              ),
-            ]),
-          ),
+          balanceProvider.overrideWith((ref) => Future.value({
+                'verified': true,
+                'current_balance': 37.21,
+                'as_of_date': '2026-10-06',
+                'source': 'statement_closing',
+              })),
         ],
       );
 
-      await container.read(transactionFeedProvider.future);
-      final liveStats = container.read(weeklyStatsProvider);
-      expect(liveStats.isLive, isTrue);
-      expect(liveStats.periodLabel, equals('this week'));
-      expect(liveStats.spent, equals(1500.0));
-      expect(liveStats.inflow, equals(10000.0));
-      expect(liveStats.latestTxnTimestamp, isNotNull);
-      expect(liveStats.lastSyncedAt, equals(DateTime(2026, 10, 3, 12, 0, 0)));
-
-      // 2. Historical/sandbox statement scenario (December 2024)
-      final historicalContainer = ProviderContainer(
-        overrides: [
-          transactionFeedProvider.overrideWith(
-            () => _FakeLiveFeedNotifier([
-              BankTransaction(
-                txnId: 'hist-1',
-                amount: 18499.65,
-                type: TransactionType.credit,
-                mode: 'UPI',
-                currentBalance: 229122.82,
-                transactionTimestamp: DateTime(2024, 12, 17, 9, 25, 50),
-                createdAt: DateTime(2026, 10, 1, 8, 30, 0),
-                narration: 'UPI/Anya Wable',
-              ),
-              BankTransaction(
-                txnId: 'hist-2',
-                amount: 49355.85,
-                type: TransactionType.credit,
-                mode: 'UPI',
-                currentBalance: 210623.17,
-                transactionTimestamp: DateTime(2024, 12, 11, 15, 35, 56),
-                createdAt: DateTime(2026, 10, 1, 8, 30, 0),
-                narration: 'UPI/Navya Borah',
-              ),
-              BankTransaction(
-                txnId: 'hist-3',
-                amount: 27098.55,
-                type: TransactionType.debit,
-                mode: 'UPI',
-                currentBalance: 161267.32,
-                transactionTimestamp: DateTime(2024, 11, 30, 3, 22, 4),
-                createdAt: DateTime(2026, 10, 1, 8, 30, 0),
-                narration: 'UPI/Manjari Srivastava',
-              ),
-            ]),
-          ),
-        ],
-      );
-
-      await historicalContainer.read(transactionFeedProvider.future);
-
-      final histStats = historicalContainer.read(weeklyStatsProvider);
-      expect(histStats.isLive, isFalse);
-      expect(histStats.periodLabel, equals('10 Dec – 17 Dec 2024'));
-      expect(histStats.spent, equals(0.0));
-      expect(histStats.inflow, closeTo(67855.50, 0.01));
-      expect(histStats.latestTxnTimestamp, equals(DateTime(2024, 12, 17, 9, 25, 50)));
-      expect(histStats.lastSyncedAt, equals(DateTime(2026, 10, 1, 8, 30, 0)));
+      final balanceAsync = await container.read(balanceProvider.future);
+      expect(balanceAsync, isNotNull);
+      expect(balanceAsync!['verified'], isTrue);
+      expect(balanceAsync['current_balance'], equals(37.21));
+      expect(balanceAsync['as_of_date'], equals('2026-10-06'));
     });
 
     testWidgets('TransactionFeedScreen renders temporal statement period and avoids ₹0 contradiction', (WidgetTester tester) async {
@@ -2167,48 +2095,14 @@ void main() {
 
       await tester.pumpAndSettle();
 
-      // Hero Aggregate displays historical statement label without the "this week" contradiction
-      expect(find.textContaining('10 Dec – 17 Dec 2024'), findsWidgets);
+      // Tap Insights in dock to open Spending Insights screen
+      await tester.tap(find.byIcon(Icons.insights_rounded));
+      await tester.pumpAndSettle();
+
+      // Hero Aggregate displays balance and avoids "this week" contradiction
+      expect(find.text('BALANCE'), findsWidgets);
       expect(find.textContaining('₹0 spent • ₹0 inflow this week'), findsNothing);
-
-      // Tap Telemetry & Analytics in dock to open Telemetry screen
-      await tester.tap(find.byTooltip('Telemetry & Analytics'));
-      await tester.pumpAndSettle();
-
-      final cardRects = tester.widgetList<DpcTelemetryCard>(find.byType(DpcTelemetryCard)).map((w) => tester.getRect(find.byWidget(w))).toList();
-      final splitRect = tester.getRect(find.byType(DpcSplitTelemetryCard));
-
-      final gap = splitRect.top - cardRects.last.bottom;
-      debugPrint('GAP BETWEEN LAST CARD AND CASH FLOW DISTRIBUTION: $gap');
-      // Gap should be exactly 18px (from SizedBox(height: 18)), not a 100+px ghost gap
-      expect(gap, equals(18.0));
-
-      // Test Question Mark (?) tap opens metric definition bottom sheet
-      final savingsHelp = find.byKey(const Key('help_icon_Savings Retention'));
-      expect(savingsHelp, findsOneWidget);
-      await tester.tap(savingsHelp);
-      await tester.pumpAndSettle();
-
-      // Bottom sheet should be visible with definition and formula
-      expect(find.text('FINANCIAL TELEMETRY METRIC'), findsOneWidget);
-      expect(find.text('DEFINITION'), findsOneWidget);
-      expect(find.textContaining('How much of the money that came in you actually kept'), findsOneWidget);
-      expect(find.text('(Total Inflow - Total Outflow) / Total Inflow'), findsOneWidget);
-
-      // Dismiss with Got It button
-      await tester.tap(find.text('Got It'));
-      await tester.pumpAndSettle();
-      expect(find.text('FINANCIAL TELEMETRY METRIC'), findsNothing);
-
-      // Test Discretionary Ratio help icon
-      final discHelp = find.byKey(const Key('help_icon_Discretionary Ratio'));
-      expect(discHelp, findsOneWidget);
-      await tester.tap(discHelp);
-      await tester.pumpAndSettle();
-      expect(find.textContaining('The share of your spending that went to "wants"'), findsOneWidget);
-      expect(find.text('Discretionary Outflow / Total Outflow'), findsOneWidget);
-      await tester.tap(find.text('Got It'));
-      await tester.pumpAndSettle();
+      expect(find.text('STATEMENT BREAKDOWN'), findsNothing);
 
       // Navigate to Profile & Account via bottom dock
       await tester.tap(find.byTooltip('Profile & Account'));
@@ -2217,7 +2111,7 @@ void main() {
       // Verify Profile screen rendered with elevated Financial Intelligence card
       expect(find.text('Profile & Account'), findsOneWidget);
       expect(find.text('Financial Intelligence'), findsOneWidget);
-      expect(find.text('ACTIVE ENGINE'), findsOneWidget);
+      expect(find.text('ACTIVE'), findsOneWidget);
       expect(find.textContaining('Gemini 2.5 Flash'), findsNothing);
 
       // Verify Security & Compliance is completely removed
@@ -2461,42 +2355,22 @@ void main() {
   });
 
   group('Cashflow Rhythm & Safe-to-Spend Tests', () {
-    testWidgets('DpcSafeToSpendCard renders safe-to-spend today, toggles to this week, and opens commitments sheet', (tester) async {
-      final mockRhythm = {
-        'safe_to_spend_today': 1250.0,
-        'safe_to_spend_this_week': 8750.0,
-        'spent_today': 200.0,
-        'spent_this_week': 1500.0,
-        'current_balance': 45000.0,
-        'upcoming_bills_total': 6500.0,
-        'upcoming_bills_count': 2,
-        'upcoming_bills': [
-          {
-            'merchant_name': 'Netflix',
-            'amount': 649.0,
-            'billing_day': 15,
-            'is_active': true,
-          },
-          {
-            'merchant_name': 'Airtel Broadband',
-            'amount': 1179.0,
-            'billing_day': 22,
-            'is_active': true,
-          },
-        ],
-        'days_to_next_inflow': 12,
-        'next_inflow_date': '2026-10-18',
-        'income_type': 'Salaried',
-        'runway_days': 28,
-        'daily_velocity': 1250.0,
+    testWidgets('DpcSafeToSpendCard renders daily safe limit and commitments', (tester) async {
+      final mockSafeToSpend = {
+        'available': true,
+        'safe_per_day': 1250.0,
+        'horizon': {
+          'days': 12,
+          'end_date': '18 Oct 2026',
+          'reason': 'Next expected income',
+        },
         'health_status': 'HEALTHY',
-        'is_live': true,
       };
 
       await tester.pumpWidget(
         ProviderScope(
           overrides: [
-            cashflowRhythmProvider.overrideWith((ref) async => mockRhythm),
+            cashflowRhythmProvider.overrideWith((ref) async => mockSafeToSpend),
             recurringCommitmentsProvider.overrideWith((ref) async => [
               {
                 'id': 'commit-1',
@@ -2521,53 +2395,36 @@ void main() {
 
       await tester.pumpAndSettle();
 
-      // Check title and default "Today" metrics
-      expect(find.text('Safe-to-Spend'), findsOneWidget);
-      expect(find.text('Today'), findsOneWidget);
-      expect(find.text('This Week'), findsOneWidget);
+      // Check title and daily limit metrics
+      expect(find.text('Daily safe limit'), findsOneWidget);
       expect(find.text('₹1,250'), findsOneWidget);
-      expect(find.text('available today'), findsOneWidget);
-      expect(find.text('₹200 spent today'), findsOneWidget);
-      expect(find.text('Healthy Rhythm'), findsOneWidget);
-      expect(find.text('₹6,500 for 2 bills'), findsOneWidget);
-
-      // Toggle to "This Week"
-      await tester.tap(find.text('This Week'));
-      await tester.pumpAndSettle();
-
-      expect(find.text('₹8,750'), findsOneWidget);
-      expect(find.text('for next 7 days'), findsOneWidget);
-      expect(find.text('₹1,500 spent this week'), findsOneWidget);
-
-      // Open recurring commitments sheet by tapping bills callout
-      await tester.tap(find.text('₹6,500 for 2 bills'));
-      await tester.pumpAndSettle();
-
-      expect(find.text('Recurring Commitments'), findsOneWidget);
-      expect(find.text('Netflix'), findsOneWidget);
-      expect(find.text('₹649'), findsOneWidget);
-      expect(find.byType(Switch), findsOneWidget);
+      expect(find.text('a day'), findsOneWidget);
+      expect(find.text('On track'), findsOneWidget);
+      expect(find.text('until 18 Oct 2026 (12 days)'), findsOneWidget);
     });
 
-    testWidgets('DpcSafeToSpendCard is hidden on Home screen when user has no bank account linked and no transactions', (tester) async {
+    testWidgets('DpcSafeToSpendCard is hidden when available is false', (tester) async {
       await tester.pumpWidget(
         ProviderScope(
           overrides: [
+            cashflowRhythmProvider.overrideWith((ref) async => {
+              'available': false,
+            }),
             activeConsentIdProvider.overrideWith(() => _FakeActiveConsentNotifier('')),
             transactionFeedProvider.overrideWith(() => _FakeFeedNotifier([])),
           ],
           child: const MaterialApp(
-            home: TransactionFeedScreen(),
+            home: Scaffold(
+              body: DpcSafeToSpendCard(),
+            ),
           ),
         ),
       );
 
       await tester.pumpAndSettle();
 
-      // Ensure the Safe-to-Spend card is NOT rendered for a brand new unlinked user
-      expect(find.byType(DpcSafeToSpendCard), findsNothing);
-      expect(find.text('No Bank Account Linked'), findsOneWidget);
-      expect(find.text('Link Bank Account'), findsOneWidget);
+      // Ensure the Safe-to-Spend card is NOT rendered when available is false
+      expect(find.text('Daily safe limit'), findsNothing);
     });
   });
 }

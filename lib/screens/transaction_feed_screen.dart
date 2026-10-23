@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../config/dpc_tokens.dart';
+import '../config/navigation_keys.dart';
 import '../config/supabase_config.dart';
 import '../models/transaction_group_model.dart';
 import '../models/transaction_model.dart';
@@ -19,6 +20,9 @@ import '../widgets/ai_companion_rive_widget.dart';
 import '../providers/chat_providers.dart';
 import '../widgets/profile_completion_dialog.dart';
 import '../widgets/dpc_safe_to_spend_card.dart';
+import '../widgets/setthi_onboarding_flow.dart';
+import '../widgets/dpc_pdf_statement_sheet.dart';
+import '../providers/pdf_statement_provider.dart';
 import 'setu_consent_webview.dart';
 
 /// Full DPC Redesign of the Setthi Transaction Feed & Telemetry Dashboard.
@@ -37,9 +41,8 @@ class TransactionFeedScreen extends ConsumerStatefulWidget {
 
 class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
   final ScrollController _scrollController = ScrollController();
-  // 0: AI Page, 1: Telemetry & Analytics, 2: Present Homepage with Total Balance, 3: Bank, 4: Profile
-  int _activeNavIndex = 2;
-  int _telemetryFilterIndex = 0; // Kept for reference
+  // 0: AI Page (Primary), 1: Spending Insights & Transactions (Merged), 4: Profile
+  int _activeNavIndex = 0;
   bool _hasPromptedProfileCompletion = false;
 
   @override
@@ -62,11 +65,13 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
     if (user == null) return;
 
     final rawName = profile?['full_name'] as String?;
-    final metaName = (user.userMetadata?['full_name'] as String? ??
-            user.userMetadata?['name'] as String?)
-        ?.trim();
+    final metaName =
+        (user.userMetadata?['full_name'] as String? ??
+                user.userMetadata?['name'] as String?)
+            ?.trim();
 
-    final bool hasValidName = (rawName != null &&
+    final bool hasValidName =
+        (rawName != null &&
             rawName.trim().isNotEmpty &&
             rawName.trim() != 'Setthi Member') ||
         (metaName != null &&
@@ -74,7 +79,8 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
             metaName.trim() != 'Setthi Member');
 
     final bool hasDob = profile?['date_of_birth'] != null;
-    final bool hasGender = profile?['gender'] != null &&
+    final bool hasGender =
+        profile?['gender'] != null &&
         (profile?['gender'] as String).trim().isNotEmpty;
 
     // Pop dialog if user does not have a complete profile (all 3 fields are compulsory)
@@ -89,15 +95,30 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
         } catch (_) {}
       }
 
-      WidgetsBinding.instance.addPostFrameCallback((_) {
+      WidgetsBinding.instance.addPostFrameCallback((_) async {
         if (!mounted) return;
-        ProfileCompletionDialog.show(
+        final completed = await ProfileCompletionDialog.show(
           context,
           initialName: hasValidName ? (rawName ?? metaName) : null,
           initialDob: initialDob,
           initialGender: profile?['gender'] as String?,
           isMandatory: true,
         );
+
+        if (completed == true && mounted) {
+          final hasTransactions =
+              ref.read(transactionFeedProvider).value?.isNotEmpty ?? false;
+          final hasConsent = ref.read(hasActiveConsentProvider);
+          if (!hasTransactions && !hasConsent) {
+            SetthiOnboardingFlow.show(
+              context,
+              initialPage: 1,
+              onComplete: () {
+                setState(() => _activeNavIndex = 0);
+              },
+            );
+          }
+        }
       });
     }
   }
@@ -111,7 +132,7 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
 
   void _onScroll() {
     if (!_scrollController.hasClients) return;
-    if (_activeNavIndex != 2) return;
+    if (_activeNavIndex == 0 || _activeNavIndex == 4) return;
     _checkAutoFetch(_scrollController.position);
   }
 
@@ -129,7 +150,10 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
 
   @override
   Widget build(BuildContext context) {
-    ref.listen<AsyncValue<Map<String, dynamic>?>>(userProfileProvider, (previous, next) {
+    ref.listen<AsyncValue<Map<String, dynamic>?>>(userProfileProvider, (
+      previous,
+      next,
+    ) {
       next.whenData((profile) {
         _checkAndPromptProfileCompletion(profile);
       });
@@ -204,34 +228,50 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
           ? null
           : DpcFloatingNavDock(
               activeIndex: _activeNavIndex,
-        onAiTap: () {
-          setState(() => _activeNavIndex = 0);
-        },
-        onTelemetryTap: () {
-          setState(() => _activeNavIndex = 1);
-        },
-        onHomeTap: () {
-          if (ref.read(transactionFeedProvider).hasError) {
-            ref.read(transactionFeedProvider.notifier).dismissErrorAndGoHome();
-          }
-          if (_activeNavIndex != 2) {
-            setState(() => _activeNavIndex = 2);
-          } else if (_scrollController.hasClients) {
-            _scrollController.animateTo(
-              0,
-              duration: const Duration(milliseconds: 350),
-              curve: Curves.easeOutCubic,
-            );
-          }
-        },
-        onBankTap: () => _showLinkBankBottomSheet(context, ref),
-        onProfileTap: () {
-          setState(() => _activeNavIndex = 4);
-        },
-        onSyncTap: () => _handleSyncAction(context, ref),
-        isSyncing: isSyncing,
-        hasActiveConsent: hasActiveConsent,
-      ),
+              onAiTap: () {
+                setState(() => _activeNavIndex = 0);
+              },
+              onTelemetryTap: () {
+                if (ref.read(transactionFeedProvider).hasError) {
+                  ref
+                      .read(transactionFeedProvider.notifier)
+                      .dismissErrorAndGoHome();
+                }
+                if (_activeNavIndex != 1 && _activeNavIndex != 2) {
+                  setState(() => _activeNavIndex = 1);
+                } else if (_scrollController.hasClients) {
+                  _scrollController.animateTo(
+                    0,
+                    duration: const Duration(milliseconds: 350),
+                    curve: Curves.easeOutCubic,
+                  );
+                }
+              },
+              onTransactionsTap: () {
+                if (ref.read(transactionFeedProvider).hasError) {
+                  ref
+                      .read(transactionFeedProvider.notifier)
+                      .dismissErrorAndGoHome();
+                }
+                if (_activeNavIndex != 1 && _activeNavIndex != 2) {
+                  setState(() => _activeNavIndex = 1);
+                } else if (_scrollController.hasClients) {
+                  _scrollController.animateTo(
+                    0,
+                    duration: const Duration(milliseconds: 350),
+                    curve: Curves.easeOutCubic,
+                  );
+                }
+              },
+              // [COMMENTED OUT FROM UI - DO NOT REMOVE]
+              // onBankTap: () => _showLinkBankBottomSheet(context, ref),
+              onProfileTap: () {
+                setState(() => _activeNavIndex = 4);
+              },
+              onSyncTap: () => _handleSyncAction(context, ref),
+              isSyncing: isSyncing,
+              hasActiveConsent: hasActiveConsent,
+            ),
     );
   }
 
@@ -249,62 +289,63 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
         elevation: 0,
         backgroundColor: DpcColors.bgOled,
         surfaceTintColor: Colors.transparent,
-        titleSpacing: 18,
+        titleSpacing: 12,
         title: Row(
+          mainAxisSize: MainAxisSize.min,
           children: [
             Container(
-              width: 38,
-              height: 38,
+              width: 32,
+              height: 32,
               decoration: BoxDecoration(
                 color: DpcColors.surfaceDark,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(
-                  color: DpcColors.surfaceBorder,
-                  width: 1,
-                ),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: DpcColors.surfaceBorder, width: 1),
               ),
               child: ClipRRect(
-                borderRadius: BorderRadius.circular(11),
-                child: const AiCompanionRiveWidget(
-                  size: 36,
-                ),
+                borderRadius: BorderRadius.circular(9),
+                child: const AiCompanionRiveWidget(size: 30),
               ),
             ),
-            const SizedBox(width: 10),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Row(
-                  children: [
-                    const Text(
-                      'Setthi AI',
-                      style: TextStyle(
-                        color: DpcColors.textPrimary,
-                        fontSize: 18,
-                        fontWeight: FontWeight.w800,
-                        letterSpacing: -0.4,
+            const SizedBox(width: 8),
+            Flexible(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Flexible(
+                        child: Text(
+                          'Setthi AI',
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: DpcColors.textPrimary,
+                            fontSize: 17,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: -0.4,
+                          ),
+                        ),
                       ),
-                    ),
-                    const SizedBox(width: 6),
-                    Container(
-                      width: 6,
-                      height: 6,
-                      decoration: const BoxDecoration(
-                        color: DpcColors.accentPositive,
-                        shape: BoxShape.circle,
+                      const SizedBox(width: 5),
+                      Container(
+                        width: 5,
+                        height: 5,
+                        decoration: const BoxDecoration(
+                          color: DpcColors.accentPositive,
+                          shape: BoxShape.circle,
+                        ),
                       ),
-                    ),
-                  ],
-                ),
-                const Text(
-                  'Smart Finance Companion',
-                  style: TextStyle(
-                    color: DpcColors.textMuted,
-                    fontSize: 10.5,
+                    ],
                   ),
-                ),
-              ],
+                  const Text(
+                    'Smart Finance Companion',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(color: DpcColors.textMuted, fontSize: 10),
+                  ),
+                ],
+              ),
             ),
           ],
         ),
@@ -314,34 +355,24 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
             decoration: BoxDecoration(
               color: DpcColors.surfaceElevated,
               borderRadius: BorderRadius.circular(20),
-              border: Border.all(
-                color: DpcColors.surfaceBorder,
-                width: 1,
-              ),
+              border: Border.all(color: DpcColors.surfaceBorder, width: 1),
             ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Icon(
-                  Icons.bolt_rounded,
-                  size: 13,
-                  color: DpcColors.textPrimary,
-                ),
-                const SizedBox(width: 4),
-                Text(
-                  '$credits credits',
-                  style: const TextStyle(
-                    color: DpcColors.textPrimary,
-                    fontSize: 11,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ],
+            child: Text(
+              '$credits credits',
+              style: const TextStyle(
+                color: DpcColors.textPrimary,
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+              ),
             ),
           ),
           IconButton(
             key: const Key('delete_conversation_button'),
-            icon: const Icon(Icons.delete_sweep_outlined, size: 20, color: DpcColors.textSecondary),
+            icon: const Icon(
+              Icons.delete_sweep_outlined,
+              size: 20,
+              color: DpcColors.textSecondary,
+            ),
             tooltip: 'Delete Conversation',
             onPressed: () => showDeleteConversationConfirmation(context, ref),
           ),
@@ -350,19 +381,23 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
       );
     }
 
-    if (_activeNavIndex == 1) {
-      // Telemetry Screen AppBar
+    if (_activeNavIndex == 1 || _activeNavIndex == 2) {
+      // Merged Spending Insights AppBar
       return AppBar(
         elevation: 0,
         backgroundColor: DpcColors.bgOled,
         surfaceTintColor: Colors.transparent,
         titleSpacing: 18,
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back_rounded, color: DpcColors.textPrimary),
-          onPressed: () => setState(() => _activeNavIndex = 2),
+          icon: const Icon(
+            Icons.arrow_back_rounded,
+            color: DpcColors.textPrimary,
+          ),
+          tooltip: 'Back to AI Chat',
+          onPressed: () => setState(() => _activeNavIndex = 0),
         ),
         title: const Text(
-          'Telemetry & Analytics',
+          'Spending Insights',
           style: TextStyle(
             color: DpcColors.textPrimary,
             fontSize: 20,
@@ -370,6 +405,23 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
             letterSpacing: -0.6,
           ),
         ),
+        actions: [
+          IconButton(
+            icon: isSyncing
+                ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: DpcColors.accentPositive,
+                    ),
+                  )
+                : const Icon(Icons.sync_rounded, color: DpcColors.textSecondary),
+            tooltip: 'Sync Statement Data',
+            onPressed: isSyncing ? null : () => _handleSyncAction(context, ref),
+          ),
+          const SizedBox(width: 6),
+        ],
       );
     }
 
@@ -415,7 +467,7 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
                   borderRadius: BorderRadius.circular(10),
                 ),
                 child: const Icon(
-                  Icons.bolt_rounded,
+                  Icons.account_balance_wallet_rounded,
                   color: DpcColors.textContrast,
                   size: 16,
                 ),
@@ -423,13 +475,16 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
             ),
           ),
           const SizedBox(width: 9),
-          const Text(
-            'Setthi',
-            style: TextStyle(
-              color: DpcColors.textPrimary,
-              fontSize: 20,
-              fontWeight: FontWeight.w800,
-              letterSpacing: -0.6,
+          const Flexible(
+            child: Text(
+              'Setthi',
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: DpcColors.textPrimary,
+                fontSize: 20,
+                fontWeight: FontWeight.w800,
+                letterSpacing: -0.6,
+              ),
             ),
           ),
         ],
@@ -466,19 +521,15 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
     bool isSyncing,
   ) {
     if (_activeNavIndex == 0) {
-      // Dedicated Setthi AI Full Page
+      // Primary: Dedicated Setthi AI Full Page
       return const SetthiAiSheet(isFullScreenPage: true);
-    }
-    if (_activeNavIndex == 1) {
-      // Screen B: Telemetry & Analytics Dashboard
-      return _buildTelemetryScreen(context, ref, transactions);
     }
     if (_activeNavIndex == 4) {
       // Dedicated Profile Screen
       return _buildProfileScreen(context, ref);
     }
-    // Screen A: Dashboard & Hero Carousel (Present Homepage with Total Balance)
-    return _buildDashboardScreen(
+    // Merged Screen: Spending Insights & Transactions
+    return _buildSpendingInsightsScreen(
       context,
       ref,
       transactions,
@@ -487,13 +538,34 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
     );
   }
 
+  static String _formatDate(String? iso) {
+    if (iso == null || iso.isEmpty) return '';
+    try {
+      final parts = iso.split('-');
+      if (parts.length == 3) {
+        final y = parts[0];
+        final m = int.tryParse(parts[1]) ?? 1;
+        final d = int.tryParse(parts[2]) ?? 1;
+        const months = [
+          'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+          'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+        ];
+        final mStr = (m >= 1 && m <= 12) ? months[m - 1] : '';
+        return '$d $mStr $y';
+      }
+    } catch (_) {}
+    return iso;
+  }
+
   /// Extracts category spend items from telemetry data or falls back to transaction grouping
   List<CategorySpendItem> _extractCategorySpendItems(
     Map<String, dynamic>? telemetryData,
     List<BankTransaction> transactions,
   ) {
     final rawCategories = telemetryData?['category_distribution'];
-    final List<dynamic> categoryList = rawCategories is List ? rawCategories : [];
+    final List<dynamic> categoryList = rawCategories is List
+        ? rawCategories
+        : [];
     final List<CategorySpendItem> categoryItems = [];
     if (categoryList.isNotEmpty) {
       for (final cat in categoryList) {
@@ -503,14 +575,16 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
           final count = ((cat['count'] ?? 0) as num).toInt();
           final pct = ((cat['percentage'] ?? 0.0) as num).toDouble();
           if (amt > 0) {
-            categoryItems.add(CategorySpendItem(
-              category: name,
-              amount: amt,
-              count: count,
-              percentage: pct,
-              color: getCategorySpendColor(name),
-              icon: getCategorySpendIcon(name),
-            ));
+            categoryItems.add(
+              CategorySpendItem(
+                category: name,
+                amount: amt,
+                count: count,
+                percentage: pct,
+                color: getCategorySpendColor(name),
+                icon: getCategorySpendIcon(name),
+              ),
+            );
           }
         }
       }
@@ -528,22 +602,35 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
       }
       final sortedEntries = grouped.entries.toList()
         ..sort((a, b) {
-          final sumA = a.value.fold<double>(0, (acc, item) => acc + item.amount);
-          final sumB = b.value.fold<double>(0, (acc, item) => acc + item.amount);
+          final sumA = a.value.fold<double>(
+            0,
+            (acc, item) => acc + item.amount,
+          );
+          final sumB = b.value.fold<double>(
+            0,
+            (acc, item) => acc + item.amount,
+          );
           return sumB.compareTo(sumA);
         });
 
       for (final entry in sortedEntries) {
-        final catSum = entry.value.fold<double>(0, (acc, item) => acc + item.amount);
+        final catSum = entry.value.fold<double>(
+          0,
+          (acc, item) => acc + item.amount,
+        );
         if (catSum > 0) {
-          categoryItems.add(CategorySpendItem(
-            category: entry.key,
-            amount: catSum,
-            count: entry.value.length,
-            percentage: fallbackTotal > 0 ? ((catSum / fallbackTotal) * 100) : 0.0,
-            color: getCategorySpendColor(entry.key),
-            icon: getCategorySpendIcon(entry.key),
-          ));
+          categoryItems.add(
+            CategorySpendItem(
+              category: entry.key,
+              amount: catSum,
+              count: entry.value.length,
+              percentage: fallbackTotal > 0
+                  ? ((catSum / fallbackTotal) * 100)
+                  : 0.0,
+              color: getCategorySpendColor(entry.key),
+              icon: getCategorySpendIcon(entry.key),
+            ),
+          );
         }
       }
     }
@@ -551,27 +638,37 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
   }
 
   // ==========================================
-  // SCREEN A: DASHBOARD & HERO CAROUSEL
+  // SCREEN: SPENDING INSIGHTS & TRANSACTIONS (MERGED)
   // ==========================================
-  Widget _buildDashboardScreen(
+  Widget _buildSpendingInsightsScreen(
     BuildContext context,
     WidgetRef ref,
     List<BankTransaction> transactions,
     bool hasActiveConsent,
     bool isSyncing,
   ) {
-    final balance = ref.watch(latestBalanceProvider);
-    final weeklyStats = ref.watch(weeklyStatsProvider);
+    final balanceAsync = ref.watch(balanceProvider);
     final telemetryAsync = ref.watch(telemetryMetricsProvider);
     final telemetryData = telemetryAsync.value;
-    final categoryItems = _extractCategorySpendItems(telemetryData, transactions);
-    double catTotalSpent = 0;
-    for (final item in categoryItems) {
-      catTotalSpent += item.amount;
-    }
-    if (catTotalSpent <= 0) {
-      catTotalSpent = ((telemetryData?['total_spent'] ?? weeklyStats.spent) as num).toDouble();
-    }
+
+    // Category Distribution from backend, fallback to local category extraction
+    final rawCategories = telemetryData?['category_distribution'];
+    final List<dynamic> categoryList =
+        rawCategories is List ? rawCategories : [];
+    final categoryItems = _extractCategorySpendItems(
+      telemetryData,
+      transactions,
+    );
+    // ignore: unused_local_variable
+    final effectiveCategories = categoryList.isNotEmpty
+        ? categoryList
+        : categoryItems.map((item) => {
+            'category': item.category,
+            'amount': item.amount,
+            'count': item.count,
+            'percentage': item.percentage,
+          }).toList();
+
     final yearGroups = ref.watch(smartGroupedTransactionsProvider);
     final sortOrder = ref.watch(transactionSortOrderProvider);
     final typeFilter = ref.watch(transactionTypeFilterProvider);
@@ -594,22 +691,20 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
         physics: const AlwaysScrollableScrollPhysics(
           parent: BouncingScrollPhysics(),
         ),
-      slivers: [
-        SliverToBoxAdapter(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(18, 12, 18, 4),
-            child: _buildHeroAggregate(
-              balance,
-              hasActiveConsent,
-              weeklyStats: weeklyStats,
-              isSyncing: isSyncing,
+        slivers: [
+          // 1. Total Available Balance Hero Aggregate
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(18, 14, 18, 6),
+              child: _buildHeroAggregate(
+                balanceAsync,
+                hasActiveConsent,
+                isSyncing: isSyncing,
+              ),
             ),
           ),
-        ),
 
-        // Cashflow Rhythm & Safe-to-Spend Today / This Week Engine Card
-        // Displayed when bank account is linked or transactions exist for the user
-        if (hasActiveConsent || transactions.isNotEmpty)
+          // 2. Daily Safe Limit Card
           const SliverToBoxAdapter(
             child: Padding(
               padding: EdgeInsets.fromLTRB(18, 4, 18, 8),
@@ -617,249 +712,344 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
             ),
           ),
 
-        // Spend Graph Based on Category (Relocated from Telemetry to Home page below total available balance)
-        if (transactions.isNotEmpty || categoryItems.isNotEmpty)
-          SliverToBoxAdapter(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(18, 4, 18, 8),
-              child: DpcCategorySpendCard(
-                items: categoryItems,
-                totalSpent: catTotalSpent,
-                periodLabel: weeklyStats.isLive ? 'This Week' : weeklyStats.periodLabel,
-              ),
-            ),
-          ),
-
-        // 2. Floating Horizontal Hero Carousel (Screen edge-to-edge with peeking affordance)
-        // [COMMENTED OUT - DO NOT REMOVE]
-        // SliverToBoxAdapter(
-        //   child: Padding(
-        //     padding: const EdgeInsets.only(top: 14, bottom: 8),
-        //     child: DpcHeroCarousel(
-        //       items: _buildHeroCarouselItems(
-        //         context,
-        //         ref,
-        //         hasActiveConsent: hasActiveConsent,
-        //         weeklyStats: weeklyStats,
-        //         isSyncing: isSyncing,
-        //       ),
-        //     ),
-        //   ),
-        // ),
-
-        if (transactions.isNotEmpty)
-          SliverToBoxAdapter(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(18, 6, 18, 8),
-              child: _buildFilterAndSortBar(
-                context,
-                ref,
-                totalTransactions: transactions.length,
-                matchingTransactions: totalMatchingTxns,
-                sortOrder: sortOrder,
-                typeFilter: typeFilter,
-                selectedYear: selectedYear,
-                availableYears: availableYears,
-              ),
-            ),
-          ),
-
-        // Transactions Feed or Empty State
-        if (transactions.isEmpty)
-          SliverToBoxAdapter(
-            child: _buildEmptyState(context, ref, hasActiveConsent, isSyncing),
-          )
-        else if (yearGroups.isEmpty)
-          SliverToBoxAdapter(child: _buildFilterEmptyState(context, ref))
-        else
-          SliverPadding(
-            padding: const EdgeInsets.symmetric(horizontal: 18),
-            sliver: SliverList(
-              delegate: SliverChildBuilderDelegate((context, yearIndex) {
-                final yearGroup = yearGroups[yearIndex];
-                final showYearHeader = availableYears.length > 1;
-
-                return Column(
+          // 4. Single Unified Spending by Category list (temporarily commented out from UI)
+          /*
+          if (effectiveCategories.isNotEmpty)
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(18, 10, 18, 8),
+                child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // Minimalist Year Header (if multi-year data exists)
-                    if (showYearHeader) ...[
-                      Padding(
-                        padding: EdgeInsets.only(
-                          top: yearIndex == 0 ? 4 : 20,
-                          bottom: 8,
+                    const Text(
+                      'SPENDING BY CATEGORY',
+                      style: DpcTypography.badgeTag,
+                    ),
+                    const SizedBox(height: 10),
+                    ...effectiveCategories.map((catItem) {
+                      final cat = catItem is Map<String, dynamic>
+                          ? catItem
+                          : (catItem is Map
+                              ? Map<String, dynamic>.from(catItem)
+                              : <String, dynamic>{});
+                      final catName =
+                          cat['category']?.toString() ?? 'Uncategorized';
+                      final amt = ((cat['amount'] ?? 0.0) as num).toDouble();
+                      final count = ((cat['count'] ?? 0) as num).toInt();
+                      final pct =
+                          ((cat['percentage'] ?? 0.0) as num).toDouble();
+
+                      return Container(
+                        margin: const EdgeInsets.only(bottom: 8),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 14,
+                          vertical: 12,
                         ),
-                        child: Row(
+                        decoration: DpcDecorations.cardBase(radius: 12),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text(
-                              '${yearGroup.year}',
-                              style: const TextStyle(
-                                color: DpcColors.textPrimary,
-                                fontSize: 14,
-                                fontWeight: FontWeight.w800,
-                                letterSpacing: 0.5,
-                              ),
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    catName,
+                                    style: const TextStyle(
+                                      color: DpcColors.textPrimary,
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Text(
+                                  BankTransaction.formatRupees(amt),
+                                  style: const TextStyle(
+                                    color: DpcColors.textPrimary,
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                              ],
                             ),
-                            const SizedBox(width: 10),
-                            Expanded(
-                              child: Container(
-                                height: 1,
-                                color: DpcColors.surfaceBorder,
-                              ),
+                            const SizedBox(height: 6),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: ClipRRect(
+                                    borderRadius: BorderRadius.circular(4),
+                                    child: LinearProgressIndicator(
+                                      value: (pct / 100.0).clamp(0.0, 1.0),
+                                      backgroundColor:
+                                          DpcColors.surfaceElevated,
+                                      valueColor: AlwaysStoppedAnimation<Color>(
+                                        DpcColors.accentPrimary
+                                            .withValues(alpha: 0.8),
+                                      ),
+                                      minHeight: 4,
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 10),
+                                Text(
+                                  count > 0
+                                      ? '$count payments • ${pct.toStringAsFixed(1)}%'
+                                      : '${pct.toStringAsFixed(1)}%',
+                                  style: const TextStyle(
+                                    color: DpcColors.textSecondary,
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                ),
+                              ],
                             ),
                           ],
                         ),
-                      ),
-                    ],
-
-                    // Months within this Year
-                    for (
-                      int mIdx = 0;
-                      mIdx < yearGroup.monthGroups.length;
-                      mIdx++
-                    ) ...[
-                      _buildMonthSection(
-                        context,
-                        yearGroup.monthGroups[mIdx],
-                        isFirstInYear: mIdx == 0 && !showYearHeader,
-                      ),
-                    ],
+                      );
+                    }),
                   ],
-                );
-              }, childCount: yearGroups.length),
+                ),
+              ),
             ),
-          ),
+          */
 
-        // On-Demand Pagination Footer
-        if (transactions.isNotEmpty)
-          SliverToBoxAdapter(
-            child: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 24),
-              child: Center(
-                child: hasMore
-                    ? (isLoadingMore
-                        ? Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 16,
-                              vertical: 10,
-                            ),
-                            decoration: BoxDecoration(
-                              color: DpcColors.surfaceElevated,
-                              borderRadius: BorderRadius.circular(20),
-                              border: Border.all(
-                                color: DpcColors.surfaceBorder,
-                                width: 1,
+          // 5. Timeline Filter & Sort Bar
+          if (transactions.isNotEmpty)
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(18, 14, 18, 8),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'TRANSACTIONS',
+                      style: DpcTypography.badgeTag,
+                    ),
+                    const SizedBox(height: 10),
+                    _buildFilterAndSortBar(
+                      context,
+                      ref,
+                      totalTransactions: transactions.length,
+                      matchingTransactions: totalMatchingTxns,
+                      sortOrder: sortOrder,
+                      typeFilter: typeFilter,
+                      selectedYear: selectedYear,
+                      availableYears: availableYears,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+
+          // Transactions Feed or Empty State
+          if (transactions.isEmpty)
+            SliverToBoxAdapter(
+              child: _buildEmptyState(
+                context,
+                ref,
+                hasActiveConsent,
+                isSyncing,
+              ),
+            )
+          else if (yearGroups.isEmpty)
+            SliverToBoxAdapter(child: _buildFilterEmptyState(context, ref))
+          else
+            SliverPadding(
+              padding: const EdgeInsets.symmetric(horizontal: 18),
+              sliver: SliverList(
+                delegate: SliverChildBuilderDelegate((context, yearIndex) {
+                  final yearGroup = yearGroups[yearIndex];
+                  final showYearHeader = availableYears.length > 1;
+
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // Minimalist Year Header (if multi-year data exists)
+                      if (showYearHeader) ...[
+                        Padding(
+                          padding: EdgeInsets.only(
+                            top: yearIndex == 0 ? 4 : 20,
+                            bottom: 8,
+                          ),
+                          child: Row(
+                            children: [
+                              Text(
+                                '${yearGroup.year}',
+                                style: const TextStyle(
+                                  color: DpcColors.textPrimary,
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w800,
+                                  letterSpacing: 0.5,
+                                ),
                               ),
-                            ),
-                            child: const Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                SizedBox(
-                                  width: 14,
-                                  height: 14,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                    color: DpcColors.accentPositive,
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: Container(
+                                  height: 1,
+                                  color: DpcColors.surfaceBorder,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+
+                      // Months within this Year
+                      for (
+                        int mIdx = 0;
+                        mIdx < yearGroup.monthGroups.length;
+                        mIdx++
+                      ) ...[
+                        _buildMonthSection(
+                          context,
+                          yearGroup.monthGroups[mIdx],
+                          isFirstInYear: mIdx == 0 && !showYearHeader,
+                        ),
+                      ],
+                    ],
+                  );
+                }, childCount: yearGroups.length),
+              ),
+            ),
+
+          // On-Demand Pagination Footer
+          if (transactions.isNotEmpty)
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  vertical: 16,
+                  horizontal: 24,
+                ),
+                child: Center(
+                  child: hasMore
+                      ? (isLoadingMore
+                            ? Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 16,
+                                  vertical: 10,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: DpcColors.surfaceElevated,
+                                  borderRadius: BorderRadius.circular(20),
+                                  border: Border.all(
+                                    color: DpcColors.surfaceBorder,
+                                    width: 1,
                                   ),
                                 ),
-                                SizedBox(width: 10),
-                                Text(
-                                  'Loading earlier transactions...',
+                                child: const Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    SizedBox(
+                                      width: 14,
+                                      height: 14,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                        color: DpcColors.accentPositive,
+                                      ),
+                                    ),
+                                    SizedBox(width: 10),
+                                    Text(
+                                      'Loading earlier transactions...',
+                                      style: TextStyle(
+                                        color: DpcColors.textSecondary,
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              )
+                            : OutlinedButton.icon(
+                                onPressed: () => ref
+                                    .read(transactionFeedProvider.notifier)
+                                    .loadMore(),
+                                style: OutlinedButton.styleFrom(
+                                  foregroundColor: DpcColors.textPrimary,
+                                  side: const BorderSide(
+                                    color: DpcColors.surfaceBorder,
+                                    width: 1,
+                                  ),
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 20,
+                                    vertical: 10,
+                                  ),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(20),
+                                  ),
+                                ),
+                                icon: const Icon(
+                                  Icons.history_rounded,
+                                  size: 16,
+                                  color: DpcColors.textSecondary,
+                                ),
+                                label: const Text(
+                                  'Load Earlier Transactions',
                                   style: TextStyle(
                                     color: DpcColors.textSecondary,
                                     fontSize: 12,
                                     fontWeight: FontWeight.w600,
                                   ),
                                 ),
-                              ],
+                              ))
+                      : Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 9,
+                          ),
+                          decoration: BoxDecoration(
+                            color: DpcColors.surfaceElevated,
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(
+                              color: DpcColors.surfaceBorder,
+                              width: 1,
                             ),
-                          )
-                        : OutlinedButton.icon(
-                            onPressed: () => ref
-                                .read(transactionFeedProvider.notifier)
-                                .loadMore(),
-                            style: OutlinedButton.styleFrom(
-                              foregroundColor: DpcColors.textPrimary,
-                              side: const BorderSide(
-                                color: DpcColors.surfaceBorder,
-                                width: 1,
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Container(
+                                width: 16,
+                                height: 16,
+                                decoration: BoxDecoration(
+                                  color: DpcColors.accentPositive.withValues(
+                                    alpha: 0.15,
+                                  ),
+                                  shape: BoxShape.circle,
+                                ),
+                                child: const Icon(
+                                  Icons.check_rounded,
+                                  size: 10,
+                                  color: DpcColors.accentPositive,
+                                ),
                               ),
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 20,
-                                vertical: 10,
+                              const SizedBox(width: 8),
+                              Text(
+                                sortOrder == TransactionSortOrder.latestFirst
+                                    ? "You're all caught up • Earliest transaction reached"
+                                    : "You're all caught up • Latest transaction reached",
+                                style: const TextStyle(
+                                  color: DpcColors.textSecondary,
+                                  fontSize: 11.5,
+                                  fontWeight: FontWeight.w600,
+                                  letterSpacing: -0.1,
+                                ),
                               ),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(20),
-                              ),
-                            ),
-                            icon: const Icon(
-                              Icons.history_rounded,
-                              size: 16,
-                              color: DpcColors.textSecondary,
-                            ),
-                            label: const Text(
-                              'Load Earlier Transactions',
-                              style: TextStyle(
-                                color: DpcColors.textSecondary,
-                                fontSize: 12,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                          ))
-                    : Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 16,
-                          vertical: 9,
-                        ),
-                        decoration: BoxDecoration(
-                          color: DpcColors.surfaceElevated,
-                          borderRadius: BorderRadius.circular(20),
-                          border: Border.all(
-                            color: DpcColors.surfaceBorder,
-                            width: 1,
+                            ],
                           ),
                         ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Container(
-                              width: 16,
-                              height: 16,
-                              decoration: BoxDecoration(
-                                color: DpcColors.accentPositive.withValues(alpha: 0.15),
-                                shape: BoxShape.circle,
-                              ),
-                              child: const Icon(
-                                Icons.check_rounded,
-                                size: 10,
-                                color: DpcColors.accentPositive,
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                            Text(
-                              sortOrder == TransactionSortOrder.latestFirst
-                                  ? "You're all caught up • Earliest transaction reached"
-                                  : "You're all caught up • Latest transaction reached",
-                              style: const TextStyle(
-                                color: DpcColors.textSecondary,
-                                fontSize: 11.5,
-                                fontWeight: FontWeight.w600,
-                                letterSpacing: -0.1,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
+                ),
               ),
             ),
-          ),
 
-        const SliverToBoxAdapter(
-          child: SizedBox(height: 100), // padding for floating dock
-        ),
-      ],
-    ),
-  );
+          const SliverToBoxAdapter(
+            child: SizedBox(height: 100), // padding for floating dock
+          ),
+        ],
+      ),
+    );
   }
 
   /// Timeline Filter & Sort Bar
@@ -899,10 +1089,7 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
                 decoration: BoxDecoration(
                   color: DpcColors.surfaceDark,
                   borderRadius: BorderRadius.circular(16),
-                  border: Border.all(
-                    color: DpcColors.surfaceBorder,
-                    width: 1,
-                  ),
+                  border: Border.all(color: DpcColors.surfaceBorder, width: 1),
                 ),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
@@ -1030,7 +1217,9 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
           child: Text(
             label,
             style: TextStyle(
-              color: isSelected ? DpcColors.textPrimary : DpcColors.textSecondary,
+              color: isSelected
+                  ? DpcColors.textPrimary
+                  : DpcColors.textSecondary,
               fontSize: 11,
               fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
             ),
@@ -1122,10 +1311,7 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
         children: [
           // Day Header
           Padding(
-            padding: const EdgeInsets.only(
-              top: 6,
-              bottom: 6,
-            ),
+            padding: const EdgeInsets.only(top: 6, bottom: 6),
             child: Row(
               children: [
                 if (isToday)
@@ -1238,7 +1424,7 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
     BuildContext context,
     WidgetRef ref, {
     required bool hasActiveConsent,
-    required WeeklyTelemetryStats weeklyStats,
+    required dynamic weeklyStats,
     required bool isSyncing,
   }) {
     final card1 = DpcHeroCardItem(
@@ -1259,16 +1445,16 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
           : _showLinkBankBottomSheet(context, ref),
     );
 
-    // Card 2: Cashflow Overview
+    // Card 2: Money Flow Overview
     final card2 = DpcHeroCardItem(
-      title: 'Cashflow Overview',
+      title: 'Money Flow Overview',
       subtitle: weeklyStats.isLive
-          ? '${BankTransaction.formatRupees(weeklyStats.spent)} spent • ${BankTransaction.formatRupees(weeklyStats.inflow)} inflow this week'
-          : '${BankTransaction.formatRupees(weeklyStats.spent)} spent • ${BankTransaction.formatRupees(weeklyStats.inflow)} inflow (${weeklyStats.periodLabel})',
-      badgeText: 'ANALYTICS',
+          ? '${BankTransaction.formatRupees(weeklyStats.spent)} spent • ${BankTransaction.formatRupees(weeklyStats.inflow)} received this week'
+          : '${BankTransaction.formatRupees(weeklyStats.spent)} spent • ${BankTransaction.formatRupees(weeklyStats.inflow)} received (${weeklyStats.periodLabel})',
+      badgeText: 'INSIGHTS',
       icon: Icons.insights_rounded,
       gradient: DpcColors.heroPastel2,
-      actionLabel: 'View Telemetry',
+      actionLabel: 'View Insights',
       onTap: () => setState(() => _activeNavIndex = 1),
     );
 
@@ -1294,7 +1480,7 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
     final card4 = DpcHeroCardItem(
       title: 'Security & Vault',
       subtitle:
-          'Zero-secret on-device architecture secured with Supabase Vault',
+          'Zero-secret on-device architecture secured with bank-grade encryption',
       badgeText: 'ENCRYPTED',
       icon: Icons.lock_rounded,
       gradient: DpcColors.heroPastel4,
@@ -1308,97 +1494,212 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
   /// 1. Prominent Hero Aggregate:
   /// Free-floating without container constraints as per DPC Rule.
   Widget _buildHeroAggregate(
-    double balance,
+    AsyncValue<Map<String, dynamic>?> balanceAsync,
     bool hasActiveConsent, {
-    WeeklyTelemetryStats? weeklyStats,
     bool isSyncing = false,
   }) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text(
-          'TOTAL AVAILABLE BALANCE',
-          style: TextStyle(
-            color: DpcColors.textSecondary,
-            fontSize: 11,
-            fontWeight: FontWeight.w700,
-            letterSpacing: 1.2,
-          ),
-        ),
-        const SizedBox(height: 6),
         Row(
-          crossAxisAlignment: CrossAxisAlignment.baseline,
-          textBaseline: TextBaseline.alphabetic,
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          crossAxisAlignment: CrossAxisAlignment.center,
           children: [
-            Text(
-              BankTransaction.formatRupees(balance),
-              style: DpcTypography.displayMetric,
+            const Expanded(
+              child: Text(
+                'BALANCE',
+                style: TextStyle(
+                  color: DpcColors.textSecondary,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 1.2,
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
             ),
             const SizedBox(width: 8),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-              decoration: BoxDecoration(
-                color: DpcColors.surfaceDark,
-                borderRadius: BorderRadius.circular(6),
-                border: Border.all(color: DpcColors.surfaceBorder, width: 1),
-              ),
-              child: const Text(
-                'INR',
-                style: TextStyle(
-                  color: DpcColors.accentPrimary,
-                  fontSize: 10,
-                  fontWeight: FontWeight.w800,
-                  letterSpacing: 0.5,
+            // Import PDF button in the right corner
+            InkWell(
+              onTap: () => DpcPdfStatementSheet.show(context),
+              borderRadius: BorderRadius.circular(8),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: DpcColors.surfaceElevated,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: DpcColors.surfaceBorder, width: 1),
+                ),
+                child: const Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      Icons.picture_as_pdf_outlined,
+                      size: 13,
+                      color: DpcColors.accentPositive,
+                    ),
+                    SizedBox(width: 4),
+                    Text(
+                      'Import PDF',
+                      style: TextStyle(
+                        color: DpcColors.accentPositive,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ),
           ],
         ),
-        if (hasActiveConsent && weeklyStats != null) ...[
-          const SizedBox(height: 6),
-          Row(
+        const SizedBox(height: 6),
+        balanceAsync.when(
+          loading: () => const Padding(
+            padding: EdgeInsets.symmetric(vertical: 8),
+            child: SizedBox(
+              height: 24,
+              width: 24,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                color: DpcColors.accentPositive,
+              ),
+            ),
+          ),
+          error: (err, stack) => Row(
             children: [
-              Icon(
-                Icons.trending_down_rounded,
-                size: 14,
-                color: weeklyStats.spent > 0
-                    ? const Color(0xFFFF6E7F)
-                    : DpcColors.textMuted,
-              ),
-              const SizedBox(width: 4),
-              Text(
-                weeklyStats.spent > 0
-                    ? (weeklyStats.isLive
-                        ? '${BankTransaction.formatRupees(weeklyStats.spent)} outflow this week'
-                        : '${BankTransaction.formatRupees(weeklyStats.spent)} outflow (${weeklyStats.periodLabel})')
-                    : (weeklyStats.isLive
-                        ? 'All accounts verified & synced'
-                        : 'Statement: ${weeklyStats.periodLabel}'),
-                style: const TextStyle(
-                  color: DpcColors.textSecondary,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w500,
+              const Text(
+                'Could not load balance',
+                style: TextStyle(
+                  color: DpcColors.accentNegative,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
                 ),
               ),
-              if (weeklyStats.inflow > 0) ...[
-                const SizedBox(width: 8),
-                const Text(
-                  '•',
-                  style: TextStyle(color: DpcColors.surfaceBorder),
-                ),
-                const SizedBox(width: 8),
-                Text(
-                  '+${BankTransaction.formatRupees(weeklyStats.inflow)} in',
-                  style: const TextStyle(
-                    color: DpcColors.accentPositive,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
+              const SizedBox(width: 8),
+              GestureDetector(
+                onTap: () => ref.invalidate(balanceProvider),
+                child: const Text(
+                  'Retry',
+                  style: TextStyle(
+                    color: DpcColors.accentPrimary,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                    decoration: TextDecoration.underline,
                   ),
                 ),
-              ],
+              ),
             ],
           ),
-        ],
+          data: (balData) {
+            final bool available = balData != null && balData['available'] == true;
+            if (!available) {
+              final bool hasTransactions =
+                  ref.watch(transactionFeedProvider).asData?.value.isNotEmpty == true;
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    hasTransactions
+                        ? 'Balance not available from this statement'
+                        : 'No statement imported yet',
+                    style: const TextStyle(
+                      color: DpcColors.textPrimary,
+                      fontSize: 18,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: -0.3,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    hasTransactions
+                        ? 'We could not verify the balance in this PDF.'
+                        : 'Import a PDF statement to see your verified balance.',
+                    style: const TextStyle(
+                      color: DpcColors.textSecondary,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ],
+              );
+            }
+
+            final double currentBal =
+                ((balData['current_balance'] ?? 0.0) as num).toDouble();
+            final String? asOfDate = balData['as_of_date']?.toString();
+            final int? daysAgo = balData['days_since_statement_end'] is num
+                ? (balData['days_since_statement_end'] as num).toInt()
+                : null;
+            final bool isStale = balData['stale'] == true;
+            final formattedDate = _formatDate(asOfDate);
+
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.baseline,
+                  textBaseline: TextBaseline.alphabetic,
+                  children: [
+                    Text(
+                      BankTransaction.formatRupees(currentBal),
+                      style: DpcTypography.displayMetric,
+                    ),
+                    const SizedBox(width: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: DpcColors.surfaceDark,
+                        borderRadius: BorderRadius.circular(6),
+                        border: Border.all(color: DpcColors.surfaceBorder, width: 1),
+                      ),
+                      child: const Text(
+                        'INR',
+                        style: TextStyle(
+                          color: DpcColors.accentPrimary,
+                          fontSize: 10,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: 0.5,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                Row(
+                  children: [
+                    Text(
+                      'as of $formattedDate${daysAgo != null ? ' · $daysAgo days ago' : ''}',
+                      style: const TextStyle(
+                        color: DpcColors.textSecondary,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                    if (isStale) ...[
+                      const SizedBox(width: 6),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1.5),
+                        decoration: BoxDecoration(
+                          color: DpcColors.accentLevel.withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: const Text(
+                          'may have changed since',
+                          style: TextStyle(
+                            color: DpcColors.accentLevel,
+                            fontSize: 10,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ],
+            );
+          },
+        ),
       ],
     );
   }
@@ -1466,85 +1767,69 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
                   Row(
                     children: [
                       Text(
-                        '${txn.formattedTime} • ${txn.mode}',
+                        '${txn.istFormattedDate} • ${txn.mode}',
                         style: const TextStyle(
                           color: DpcColors.textSecondary,
                           fontSize: 11,
                           fontWeight: FontWeight.w500,
                         ),
                       ),
-                      if (txn.category != null && txn.category!.isNotEmpty) ...[
-                        const SizedBox(width: 6),
-                        Flexible(
-                          child: GestureDetector(
-                            behavior: HitTestBehavior.opaque,
-                            onTap: () => _showCategoryPickerModal(context, txn),
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 6,
-                                vertical: 1.5,
-                              ),
-                              decoration: BoxDecoration(
-                                color: txn.accentColor.withValues(alpha: 0.12),
-                                borderRadius: BorderRadius.circular(4),
-                                border: Border.all(
-                                  color: txn.accentColor.withValues(alpha: 0.3),
-                                  width: 0.8,
-                                ),
-                              ),
-                              child: Text(
-                                txn.category!,
-                                style: TextStyle(
-                                  color: txn.accentColor,
-                                  fontSize: 9.5,
-                                  fontWeight: FontWeight.w600,
-                                  letterSpacing: 0.1,
-                                ),
-                                overflow: TextOverflow.ellipsis,
-                              ),
+                      if (txn.displayKindLabel != null) ...[
+                        const SizedBox(width: 4),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 5,
+                            vertical: 1,
+                          ),
+                          decoration: BoxDecoration(
+                            color: DpcColors.surfaceTrack,
+                            borderRadius: BorderRadius.circular(4),
+                            border: Border.all(
+                              color: DpcColors.surfaceBorder,
+                              width: 0.8,
                             ),
                           ),
-                        ),
-                      ] else ...[
-                        const SizedBox(width: 6),
-                        GestureDetector(
-                          behavior: HitTestBehavior.opaque,
-                          onTap: () => _showCategoryPickerModal(context, txn),
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 5,
-                              vertical: 1.5,
-                            ),
-                            decoration: BoxDecoration(
-                              color: DpcColors.surfaceTrack.withValues(alpha: 0.7),
-                              borderRadius: BorderRadius.circular(4),
-                              border: Border.all(
-                                color: DpcColors.surfaceBorder,
-                                width: 0.8,
-                              ),
-                            ),
-                            child: const Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(
-                                  Icons.add_rounded,
-                                  size: 10,
-                                  color: DpcColors.textMuted,
-                                ),
-                                SizedBox(width: 2),
-                                Text(
-                                  'Tag',
-                                  style: TextStyle(
-                                    color: DpcColors.textMuted,
-                                    fontSize: 9.5,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                              ],
+                          child: Text(
+                            txn.displayKindLabel!,
+                            style: const TextStyle(
+                              color: DpcColors.textSecondary,
+                              fontSize: 9,
+                              fontWeight: FontWeight.w600,
                             ),
                           ),
                         ),
                       ],
+                      const SizedBox(width: 6),
+                      Flexible(
+                        child: GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          onTap: () => _showCategoryPickerModal(context, txn),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 6,
+                              vertical: 1.5,
+                            ),
+                            decoration: BoxDecoration(
+                              color: txn.accentColor.withValues(alpha: 0.12),
+                              borderRadius: BorderRadius.circular(4),
+                              border: Border.all(
+                                color: txn.accentColor.withValues(alpha: 0.3),
+                                width: 0.8,
+                              ),
+                            ),
+                            child: Text(
+                              txn.displayCategory,
+                              style: TextStyle(
+                                color: txn.accentColor,
+                                fontSize: 9.5,
+                                fontWeight: FontWeight.w600,
+                                letterSpacing: 0.1,
+                              ),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ),
+                      ),
                     ],
                   ),
                 ],
@@ -1576,33 +1861,50 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
     final profile = profileAsync.value;
 
     final profileName = (profile?['full_name'] as String?)?.trim();
-    final metaName = (user?.userMetadata?['full_name'] as String? ??
-            user?.userMetadata?['name'] as String?)
-        ?.trim();
+    final metaName =
+        (user?.userMetadata?['full_name'] as String? ??
+                user?.userMetadata?['name'] as String?)
+            ?.trim();
     final fullName = (profileName != null && profileName.isNotEmpty)
         ? profileName
         : ((metaName != null && metaName.isNotEmpty)
-            ? metaName
-            : 'Setthi Member');
+              ? metaName
+              : 'Setthi Member');
 
     final userEmail = user?.email?.trim();
     final profileEmail = (profile?['email'] as String?)?.trim();
     final email = (userEmail != null && userEmail.isNotEmpty)
         ? userEmail
         : ((profileEmail != null && profileEmail.isNotEmpty)
-            ? profileEmail
-            : null);
+              ? profileEmail
+              : null);
 
     final hasActiveConsent = ref.watch(hasActiveConsentProvider);
     final activeConsentId = ref.watch(activeConsentIdProvider);
-    final balance = ref.watch(latestBalanceProvider);
     final aiCredits = ref.watch(aiCreditsProvider);
+    final balanceAsync = ref.watch(balanceProvider);
+
+    int? displayAge;
+    if (profile?['date_of_birth'] != null) {
+      try {
+        final dob = DateTime.parse(profile!['date_of_birth'].toString());
+        final nowUtc = DateTime.now().toUtc();
+        final nowIst = nowUtc.add(const Duration(hours: 5, minutes: 30));
+        int a = nowIst.year - dob.year;
+        if (nowIst.month < dob.month ||
+            (nowIst.month == dob.month && nowIst.day < dob.day)) {
+          a--;
+        }
+        displayAge = a;
+      } catch (_) {}
+    }
+    displayAge ??= profile?['age'] is num
+        ? (profile!['age'] as num).toInt()
+        : null;
 
     final avatarLetter = (fullName != 'Setthi Member' && fullName.isNotEmpty)
         ? fullName[0].toUpperCase()
-        : (email != null && email.isNotEmpty
-            ? email[0].toUpperCase()
-            : 'S');
+        : (email != null && email.isNotEmpty ? email[0].toUpperCase() : 'S');
 
     return SingleChildScrollView(
       physics: const BouncingScrollPhysics(),
@@ -1711,7 +2013,7 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
                               ),
                             ),
                           ),
-                          if (profile?['age'] != null)
+                          if (displayAge != null)
                             Container(
                               padding: const EdgeInsets.symmetric(
                                 horizontal: 8,
@@ -1726,7 +2028,7 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
                                 ),
                               ),
                               child: Text(
-                                'Age: ${profile!['age']}',
+                                'Age: $displayAge',
                                 style: const TextStyle(
                                   color: DpcColors.textSecondary,
                                   fontSize: 10,
@@ -1771,16 +2073,22 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
                                 vertical: 3,
                               ),
                               decoration: BoxDecoration(
-                                color: (profile?['income_type'] != null &&
-                                        (profile!['income_type'] as String).isNotEmpty)
+                                color:
+                                    (profile?['income_type'] != null &&
+                                        (profile!['income_type'] as String)
+                                            .isNotEmpty)
                                     ? DpcColors.surfaceTrack
                                     : DpcColors.surfaceElevated,
                                 borderRadius: BorderRadius.circular(10),
                                 border: Border.all(
-                                  color: (profile?['income_type'] != null &&
-                                          (profile!['income_type'] as String).isNotEmpty)
+                                  color:
+                                      (profile?['income_type'] != null &&
+                                          (profile!['income_type'] as String)
+                                              .isNotEmpty)
                                       ? DpcColors.surfaceBorder
-                                      : DpcColors.accentPositive.withValues(alpha: 0.4),
+                                      : DpcColors.accentPositive.withValues(
+                                          alpha: 0.4,
+                                        ),
                                   width: 1,
                                 ),
                               ),
@@ -1788,7 +2096,8 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
                                   if (profile?['income_type'] == null ||
-                                      (profile!['income_type'] as String).isEmpty) ...[
+                                      (profile!['income_type'] as String)
+                                          .isEmpty) ...[
                                     const Icon(
                                       Icons.add_rounded,
                                       size: 11,
@@ -1798,12 +2107,16 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
                                   ],
                                   Text(
                                     (profile?['income_type'] != null &&
-                                            (profile!['income_type'] as String).isNotEmpty)
+                                            (profile!['income_type'] as String)
+                                                .isNotEmpty)
                                         ? '${profile['income_type']}'
                                         : 'Add Income Type',
                                     style: TextStyle(
-                                      color: (profile?['income_type'] != null &&
-                                              (profile!['income_type'] as String).isNotEmpty)
+                                      color:
+                                          (profile?['income_type'] != null &&
+                                              (profile!['income_type']
+                                                      as String)
+                                                  .isNotEmpty)
                                           ? DpcColors.accentPositive
                                           : DpcColors.accentPositive,
                                       fontSize: 10,
@@ -1827,20 +2140,44 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
                                 vertical: 3,
                               ),
                               decoration: BoxDecoration(
-                                color: (profile?['expected_monthly_income'] != null &&
-                                        ((profile!['expected_monthly_income'] is num &&
-                                                profile['expected_monthly_income'] > 0) ||
-                                            (double.tryParse(profile['expected_monthly_income'].toString()) != null &&
-                                                double.parse(profile['expected_monthly_income'].toString()) > 0)))
+                                color:
+                                    (profile?['expected_monthly_income'] !=
+                                            null &&
+                                        ((profile!['expected_monthly_income']
+                                                    is num &&
+                                                profile['expected_monthly_income'] >
+                                                    0) ||
+                                            (double.tryParse(
+                                                      profile['expected_monthly_income']
+                                                          .toString(),
+                                                    ) !=
+                                                    null &&
+                                                double.parse(
+                                                      profile['expected_monthly_income']
+                                                          .toString(),
+                                                    ) >
+                                                    0)))
                                     ? DpcColors.surfaceTrack
                                     : DpcColors.surfaceElevated,
                                 borderRadius: BorderRadius.circular(10),
                                 border: Border.all(
-                                  color: (profile?['expected_monthly_income'] != null &&
-                                          ((profile!['expected_monthly_income'] is num &&
-                                                  profile['expected_monthly_income'] > 0) ||
-                                              (double.tryParse(profile['expected_monthly_income'].toString()) != null &&
-                                                  double.parse(profile['expected_monthly_income'].toString()) > 0)))
+                                  color:
+                                      (profile?['expected_monthly_income'] !=
+                                              null &&
+                                          ((profile!['expected_monthly_income']
+                                                      is num &&
+                                                  profile['expected_monthly_income'] >
+                                                      0) ||
+                                              (double.tryParse(
+                                                        profile['expected_monthly_income']
+                                                            .toString(),
+                                                      ) !=
+                                                      null &&
+                                                  double.parse(
+                                                        profile['expected_monthly_income']
+                                                            .toString(),
+                                                      ) >
+                                                      0)))
                                       ? DpcColors.surfaceBorder
                                       : DpcColors.surfaceBorder,
                                   width: 1,
@@ -1849,11 +2186,22 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
                               child: Row(
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
-                                  if (profile?['expected_monthly_income'] == null ||
-                                      ((profile!['expected_monthly_income'] is num &&
-                                              profile['expected_monthly_income'] <= 0) ||
-                                          (double.tryParse(profile['expected_monthly_income'].toString()) != null &&
-                                              double.parse(profile['expected_monthly_income'].toString()) <= 0))) ...[
+                                  if (profile?['expected_monthly_income'] ==
+                                          null ||
+                                      ((profile!['expected_monthly_income']
+                                                  is num &&
+                                              profile['expected_monthly_income'] <=
+                                                  0) ||
+                                          (double.tryParse(
+                                                    profile['expected_monthly_income']
+                                                        .toString(),
+                                                  ) !=
+                                                  null &&
+                                              double.parse(
+                                                    profile['expected_monthly_income']
+                                                        .toString(),
+                                                  ) <=
+                                                  0))) ...[
                                     const Icon(
                                       Icons.add_rounded,
                                       size: 11,
@@ -1862,19 +2210,42 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
                                     const SizedBox(width: 3),
                                   ],
                                   Text(
-                                    (profile?['expected_monthly_income'] != null &&
-                                            ((profile!['expected_monthly_income'] is num &&
-                                                    profile['expected_monthly_income'] > 0) ||
-                                                (double.tryParse(profile['expected_monthly_income'].toString()) != null &&
-                                                    double.parse(profile['expected_monthly_income'].toString()) > 0)))
+                                    (profile?['expected_monthly_income'] !=
+                                                null &&
+                                            ((profile!['expected_monthly_income']
+                                                        is num &&
+                                                    profile['expected_monthly_income'] >
+                                                        0) ||
+                                                (double.tryParse(
+                                                          profile['expected_monthly_income']
+                                                              .toString(),
+                                                        ) !=
+                                                        null &&
+                                                    double.parse(
+                                                          profile['expected_monthly_income']
+                                                              .toString(),
+                                                        ) >
+                                                        0)))
                                         ? 'Baseline: ${BankTransaction.formatRupees(profile['expected_monthly_income'] is num ? (profile['expected_monthly_income'] as num).toDouble() : double.parse(profile['expected_monthly_income'].toString()))}/mo'
                                         : 'Add Baseline Income',
                                     style: TextStyle(
-                                      color: (profile?['expected_monthly_income'] != null &&
-                                              ((profile!['expected_monthly_income'] is num &&
-                                                      profile['expected_monthly_income'] > 0) ||
-                                                  (double.tryParse(profile['expected_monthly_income'].toString()) != null &&
-                                                      double.parse(profile['expected_monthly_income'].toString()) > 0)))
+                                      color:
+                                          (profile?['expected_monthly_income'] !=
+                                                  null &&
+                                              ((profile!['expected_monthly_income']
+                                                          is num &&
+                                                      profile['expected_monthly_income'] >
+                                                          0) ||
+                                                  (double.tryParse(
+                                                            profile['expected_monthly_income']
+                                                                .toString(),
+                                                          ) !=
+                                                          null &&
+                                                      double.parse(
+                                                            profile['expected_monthly_income']
+                                                                .toString(),
+                                                          ) >
+                                                          0)))
                                           ? DpcColors.textPrimary
                                           : DpcColors.textSecondary,
                                       fontSize: 10,
@@ -1903,30 +2274,32 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: const [
-                        Icon(
-                          Icons.auto_awesome_rounded,
-                          color: DpcColors.textPrimary,
-                          size: 18,
-                        ),
-                        SizedBox(width: 8),
-                        Text(
-                          'Financial Intelligence',
-                          style: TextStyle(
-                            color: DpcColors.textPrimary,
-                            fontSize: 16,
-                            fontWeight: FontWeight.w700,
-                            letterSpacing: -0.3,
-                          ),
-                        ),
-                      ],
+                    const Icon(
+                      Icons.auto_awesome_rounded,
+                      color: DpcColors.textPrimary,
+                      size: 18,
                     ),
+                    const SizedBox(width: 8),
+                    const Expanded(
+                      child: Text(
+                        'Financial Intelligence',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: DpcColors.textPrimary,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: -0.3,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 3,
+                      ),
                       decoration: BoxDecoration(
                         color: DpcColors.surfaceTrack,
                         borderRadius: BorderRadius.circular(6),
@@ -1936,7 +2309,7 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
                         ),
                       ),
                       child: const Text(
-                        'ACTIVE ENGINE',
+                        'ACTIVE',
                         style: TextStyle(
                           color: DpcColors.textSecondary,
                           fontSize: 9,
@@ -1949,7 +2322,7 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
                 ),
                 const SizedBox(height: 12),
                 const Text(
-                  'Automated telemetry, habit detection, and conversational financial assistance synchronized with your bank feeds.',
+                  'Ask questions, check your habits, and get simple answers about your money anytime.',
                   style: TextStyle(
                     color: DpcColors.textSecondary,
                     fontSize: 12,
@@ -1972,7 +2345,9 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
                             ),
                           ),
                           TextSpan(
-                            text: aiCredits == 1 ? 'credit remaining' : 'credits remaining',
+                            text: aiCredits == 1
+                                ? 'credit remaining'
+                                : 'credits remaining',
                             style: const TextStyle(
                               color: DpcColors.textSecondary,
                               fontSize: 13,
@@ -1986,7 +2361,10 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
                       onTap: () => SetthiAiSheet.show(context),
                       borderRadius: BorderRadius.circular(10),
                       child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 14,
+                          vertical: 7,
+                        ),
                         decoration: BoxDecoration(
                           color: DpcColors.surfaceTrack,
                           borderRadius: BorderRadius.circular(10),
@@ -2042,7 +2420,10 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
                       ),
                     ),
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 4,
+                      ),
                       decoration: BoxDecoration(
                         color: hasActiveConsent
                             ? DpcColors.accentPositive.withValues(alpha: 0.12)
@@ -2065,7 +2446,7 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
                 const SizedBox(height: 12),
                 Text(
                   hasActiveConsent
-                      ? 'Connected via RBI-regulated Setu Account Aggregator. Live balance: ${BankTransaction.formatRupees(balance)}'
+                      ? 'Connected via RBI-regulated Setu Account Aggregator.${balanceAsync.value?['current_balance'] != null ? ' Balance: ${BankTransaction.formatRupees((balanceAsync.value!['current_balance'] as num).toDouble())}' : ''}'
                       : 'Link your bank account using Setu Account Aggregator to automatically track UPI spending.',
                   style: const TextStyle(
                     color: DpcColors.textSecondary,
@@ -2085,33 +2466,34 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
                   ),
                 ],
                 const SizedBox(height: 14),
-                SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton.icon(
-                    onPressed: () => _showLinkBankBottomSheet(context, ref),
-                    icon: Icon(
-                      hasActiveConsent ? Icons.sync_rounded : Icons.link_rounded,
-                      size: 16,
-                      color: DpcColors.textContrast,
-                    ),
-                    label: Text(
-                      hasActiveConsent ? 'Manage Bank Consent' : 'Connect Bank Account',
-                      style: const TextStyle(
-                        color: DpcColors.textContrast,
-                        fontSize: 13,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: DpcColors.accentPositive,
-                      elevation: 0,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(14),
-                      ),
-                      padding: const EdgeInsets.symmetric(vertical: 12),
-                    ),
-                  ),
-                ),
+                // [COMMENTED OUT FROM UI - DO NOT REMOVE]
+                // SizedBox(
+                //   width: double.infinity,
+                //   child: ElevatedButton.icon(
+                //     onPressed: () => _showLinkBankBottomSheet(context, ref),
+                //     icon: Icon(
+                //       hasActiveConsent ? Icons.sync_rounded : Icons.link_rounded,
+                //       size: 16,
+                //       color: DpcColors.textContrast,
+                //     ),
+                //     label: Text(
+                //       hasActiveConsent ? 'Manage Bank Consent' : 'Connect Bank Account',
+                //       style: const TextStyle(
+                //         color: DpcColors.textContrast,
+                //         fontSize: 13,
+                //         fontWeight: FontWeight.w700,
+                //       ),
+                //     ),
+                //     style: ElevatedButton.styleFrom(
+                //       backgroundColor: DpcColors.accentPositive,
+                //       elevation: 0,
+                //       shape: RoundedRectangleBorder(
+                //         borderRadius: BorderRadius.circular(14),
+                //       ),
+                //       padding: const EdgeInsets.symmetric(vertical: 12),
+                //     ),
+                //   ),
+                // ),
               ],
             ),
           ),
@@ -2135,8 +2517,11 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
             height: 48,
             child: OutlinedButton.icon(
               onPressed: () async {
+                final authService = ref.read(authServiceProvider);
+                ref.read(pdfStatementImportProvider.notifier).reset();
+                ref.read(lastParsedPdfResultProvider.notifier).clear();
                 ref.read(authBypassProvider.notifier).reset();
-                await ref.read(authServiceProvider).signOut();
+                ActiveConsentIdNotifier.deletePersistedConsent();
                 ref.invalidate(currentUserProvider);
                 ref.invalidate(userProfileProvider);
                 ref.invalidate(cashflowRhythmProvider);
@@ -2144,6 +2529,10 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
                 ref.invalidate(transactionFeedProvider);
                 ref.invalidate(telemetryMetricsProvider);
                 ref.invalidate(activeConsentIdProvider);
+                ref.invalidate(hasActiveConsentProvider);
+                ref.invalidate(chatMessagesProvider);
+                ref.invalidate(setthiIcebreakerProvider);
+                await authService.signOut();
               },
               icon: const Icon(
                 Icons.logout_rounded,
@@ -2178,7 +2567,8 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
             height: 48,
             child: OutlinedButton.icon(
               key: const Key('delete_account_button'),
-              onPressed: () => _showDeleteAccountConfirmationModal(context, ref),
+              onPressed: () =>
+                  _showDeleteAccountConfirmationModal(context, ref),
               icon: const Icon(
                 Icons.delete_forever_rounded,
                 color: DpcColors.accentNegative,
@@ -2193,7 +2583,9 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
                 ),
               ),
               style: OutlinedButton.styleFrom(
-                backgroundColor: DpcColors.accentNegative.withValues(alpha: 0.06),
+                backgroundColor: DpcColors.accentNegative.withValues(
+                  alpha: 0.06,
+                ),
                 side: BorderSide(
                   color: DpcColors.accentNegative.withValues(alpha: 0.4),
                   width: 1,
@@ -2246,7 +2638,10 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
   }
 
   /// Displays the confirmation bottom sheet for irreversible account and data deletion
-  void _showDeleteAccountConfirmationModal(BuildContext context, WidgetRef ref) {
+  void _showDeleteAccountConfirmationModal(
+    BuildContext context,
+    WidgetRef ref,
+  ) {
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
@@ -2296,10 +2691,14 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
                         width: 40,
                         height: 40,
                         decoration: BoxDecoration(
-                          color: DpcColors.accentNegative.withValues(alpha: 0.15),
+                          color: DpcColors.accentNegative.withValues(
+                            alpha: 0.15,
+                          ),
                           borderRadius: BorderRadius.circular(12),
                           border: Border.all(
-                            color: DpcColors.accentNegative.withValues(alpha: 0.3),
+                            color: DpcColors.accentNegative.withValues(
+                              alpha: 0.3,
+                            ),
                             width: 1,
                           ),
                         ),
@@ -2360,11 +2759,21 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
                           ),
                         ),
                         const SizedBox(height: 10),
-                        _buildPurgeBullet('All synced bank transactions and balance logs'),
-                        _buildPurgeBullet('All Setu Account Aggregator consents and links'),
-                        _buildPurgeBullet('Custom merchant categorizations and rules'),
-                        _buildPurgeBullet('Setthi AI chat logs, prompt history, and nudges'),
-                        _buildPurgeBullet('User profile credentials and active sessions'),
+                        _buildPurgeBullet(
+                          'All synced bank transactions and balance logs',
+                        ),
+                        _buildPurgeBullet(
+                          'All Setu Account Aggregator consents and links',
+                        ),
+                        _buildPurgeBullet(
+                          'Custom merchant categorizations and rules',
+                        ),
+                        _buildPurgeBullet(
+                          'Setthi AI chat logs, prompt history, and nudges',
+                        ),
+                        _buildPurgeBullet(
+                          'User profile credentials and active sessions',
+                        ),
                       ],
                     ),
                   ),
@@ -2376,7 +2785,9 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
                       child: Padding(
                         padding: EdgeInsets.symmetric(vertical: 16),
                         child: CircularProgressIndicator(
-                          valueColor: AlwaysStoppedAnimation<Color>(DpcColors.accentNegative),
+                          valueColor: AlwaysStoppedAnimation<Color>(
+                            DpcColors.accentNegative,
+                          ),
                         ),
                       ),
                     )
@@ -2388,58 +2799,138 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
                         onPressed: () async {
                           setModalState(() => isDeleting = true);
                           try {
-                            final success = await ref.read(authServiceProvider).deleteAccount();
-                            if (success && context.mounted) {
-                              Navigator.of(modalContext).pop();
+                            // 1. Purge account and database records without signing out immediately
+                            final success = await ref
+                                .read(authServiceProvider)
+                                .deleteAccount(signOutAfter: false);
+
+                            if (success) {
+                              // 2. Dismiss the modal bottom sheet immediately while context is still valid
+                              if (modalContext.mounted &&
+                                  Navigator.of(modalContext).canPop()) {
+                                Navigator.of(modalContext).pop();
+                              } else if (context.mounted &&
+                                  Navigator.of(
+                                    context,
+                                    rootNavigator: true,
+                                  ).canPop()) {
+                                Navigator.of(
+                                  context,
+                                  rootNavigator: true,
+                                ).pop();
+                              }
+
+                              // 3. Clear local storage cache & provider states
+                              ref.read(pdfStatementImportProvider.notifier).reset();
+                              ref.read(lastParsedPdfResultProvider.notifier).clear();
                               ref.read(authBypassProvider.notifier).reset();
+                              ActiveConsentIdNotifier.deletePersistedConsent();
                               ref.invalidate(currentUserProvider);
                               ref.invalidate(userProfileProvider);
+                              ref.invalidate(cashflowRhythmProvider);
+                              ref.invalidate(recurringCommitmentsProvider);
                               ref.invalidate(transactionFeedProvider);
                               ref.invalidate(telemetryMetricsProvider);
+                              ref.invalidate(activeConsentIdProvider);
                               ref.invalidate(hasActiveConsentProvider);
-                              ScaffoldMessenger.of(context).showSnackBar(
+                              ref.invalidate(chatMessagesProvider);
+                              ref.invalidate(setthiIcebreakerProvider);
+
+                              // 4. Show confirmation snackbar on the root messenger
+                              rootScaffoldMessengerKey.currentState?.showSnackBar(
                                 SnackBar(
                                   backgroundColor: DpcColors.surfaceDark,
                                   behavior: SnackBarBehavior.floating,
-                                  margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                  margin: const EdgeInsets.symmetric(
+                                    horizontal: 16,
+                                    vertical: 12,
+                                  ),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
                                   content: const Row(
                                     children: [
-                                      Icon(Icons.check_circle_rounded, color: DpcColors.accentPositive, size: 18),
+                                      Icon(
+                                        Icons.check_circle_rounded,
+                                        color: DpcColors.accentPositive,
+                                        size: 18,
+                                      ),
                                       SizedBox(width: 8),
                                       Expanded(
                                         child: Text(
                                           'Account and associated data deleted permanently.',
-                                          style: TextStyle(color: DpcColors.textPrimary, fontSize: 13),
+                                          style: TextStyle(
+                                            color: DpcColors.textPrimary,
+                                            fontSize: 13,
+                                          ),
                                         ),
                                       ),
                                     ],
                                   ),
                                 ),
                               );
+
+                              // 5. Sign out, which cleanly transitions SetthiApp to AuthScreen with NO modals open
+                              await ref.read(authServiceProvider).signOut();
                             }
                           } catch (e) {
                             setModalState(() => isDeleting = false);
-                            if (context.mounted) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(
-                                  backgroundColor: DpcColors.surfaceDark,
-                                  content: Text('Failed to delete account: $e', style: const TextStyle(color: DpcColors.accentNegative)),
+                            final errorMsg = e.toString().replaceFirst(
+                              RegExp(r'^Exception:\s*'),
+                              '',
+                            );
+                            rootScaffoldMessengerKey.currentState?.showSnackBar(
+                              SnackBar(
+                                backgroundColor: DpcColors.surfaceDark,
+                                behavior: SnackBarBehavior.floating,
+                                margin: const EdgeInsets.symmetric(
+                                  horizontal: 16,
+                                  vertical: 12,
                                 ),
-                              );
-                            }
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                content: Row(
+                                  children: [
+                                    const Icon(
+                                      Icons.error_outline_rounded,
+                                      color: DpcColors.accentNegative,
+                                      size: 18,
+                                    ),
+                                    SizedBox(width: 8),
+                                    Expanded(
+                                      child: Text(
+                                        'Failed to delete account: $errorMsg',
+                                        style: const TextStyle(
+                                          color: DpcColors.textPrimary,
+                                          fontSize: 13,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            );
                           }
                         },
-                        icon: const Icon(Icons.delete_forever_rounded, size: 18),
+                        icon: const Icon(
+                          Icons.delete_forever_rounded,
+                          size: 18,
+                        ),
                         label: const Text(
                           'Permanently Delete Account',
-                          style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14),
+                          style: TextStyle(
+                            fontWeight: FontWeight.w700,
+                            fontSize: 14,
+                          ),
                         ),
                         style: ElevatedButton.styleFrom(
                           backgroundColor: DpcColors.accentNegative,
                           foregroundColor: Colors.white,
                           padding: const EdgeInsets.symmetric(vertical: 14),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(14),
+                          ),
                           elevation: 0,
                         ),
                       ),
@@ -2503,397 +2994,15 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
     WidgetRef ref,
     List<BankTransaction> transactions,
   ) {
-    final weeklyStats = ref.watch(weeklyStatsProvider);
-    final balance = ref.watch(latestBalanceProvider);
-    final telemetryAsync = ref.watch(telemetryMetricsProvider);
-    final telemetryData = telemetryAsync.value;
-
-    // Live Aggregated Metrics from get_telemetry_metrics RPC
-    final totalSpent = ((telemetryData?['total_spent'] ?? weeklyStats.spent) as num).toDouble();
-    final totalInflow = ((telemetryData?['total_inflow'] ?? weeklyStats.inflow) as num).toDouble();
-    final savingsRatio = ((telemetryData?['savings_ratio'] ??
-            (totalInflow > 0
-                ? ((totalInflow - totalSpent) / totalInflow).clamp(0.0, 1.0)
-                : 0.0)) as num)
-        .toDouble();
-    final discretionaryRatio =
-        ((telemetryData?['discretionary_ratio'] ?? 0.0) as num).toDouble();
-    final dailyVelocity = ((telemetryData?['daily_velocity'] ??
-            (totalSpent > 0 ? (totalSpent / 7).roundToDouble() : 0.0)) as num)
-        .toDouble();
-    final healthScore =
-        ((telemetryData?['financial_health_score'] ?? 50) as num).toInt();
-
-    final filterOptions = [
-      'All Time',
-      'This Month',
-      'Last 7 Days',
-      'Debits',
-      'Inflow',
-    ];
-
-    // Channel Volume Distribution from live DB
-    final rawChannels = telemetryData?['channel_distribution'];
-    final List<dynamic> channelList = rawChannels is List ? rawChannels : [];
-    final List<DpcLiquidVolumeItem> channelItems = [];
-    if (channelList.isNotEmpty) {
-      final colors = [
-        DpcColors.accentPrimary,
-        DpcColors.accentLevel,
-        DpcColors.accentPositive,
-        const Color(0xFFC084FC),
-      ];
-      for (var i = 0; i < channelList.length && i < 3; i++) {
-        final item = channelList[i] as Map<String, dynamic>;
-        final mode = item['mode']?.toString() ?? 'Other';
-        final pct = ((item['percentage'] ?? 0) as num).toDouble();
-        final rawAmt = item['amount'];
-        final amt = rawAmt != null ? ((rawAmt as num).toDouble()) : 0.0;
-        final amountText = amt > 0 ? BankTransaction.formatRupees(amt) : '${pct.round()}%';
-        channelItems.add(DpcLiquidVolumeItem(
-          label: mode == 'FT' ? 'Bank FT' : (mode == 'OTHERS' ? 'Other' : mode),
-          amount: amountText,
-          fraction: (pct / 100.0).clamp(0.0, 1.0),
-          color: colors[i % colors.length],
-        ));
-      }
-    }
-    if (channelItems.isEmpty) {
-      channelItems.addAll([
-        DpcLiquidVolumeItem(
-          label: 'UPI Transfers',
-          amount: '0%',
-          fraction: 0.0,
-          color: DpcColors.accentPrimary,
-        ),
-        DpcLiquidVolumeItem(
-          label: 'ATM / Cash',
-          amount: '0%',
-          fraction: 0.0,
-          color: DpcColors.accentLevel,
-        ),
-        DpcLiquidVolumeItem(
-          label: 'NetBanking / FT',
-          amount: '0%',
-          fraction: 0.0,
-          color: DpcColors.accentPositive,
-        ),
-      ]);
-    }
-
-    // Weekly Outflow Velocity from live DB
-    final rawWeekly = telemetryData?['weekly_outflow_velocity'];
-    final List<dynamic> weeklyList = rawWeekly is List ? rawWeekly : [];
-    final List<DpcPhaseGaugeItem> weeklyItems = [];
-    if (weeklyList.isNotEmpty) {
-      double maxWeekly = 1.0;
-      for (final w in weeklyList) {
-        if (w is Map) {
-          final amt = ((w['amount'] ?? 0.0) as num).toDouble();
-          if (amt > maxWeekly) maxWeekly = amt;
-        }
-      }
-      final colors = [
-        DpcColors.accentPositive,
-        DpcColors.accentPrimary,
-        DpcColors.accentLevel,
-        DpcColors.accentPositive,
-      ];
-      for (var i = 0; i < weeklyList.length; i++) {
-        final w = weeklyList[i] as Map<String, dynamic>;
-        final label = w['label']?.toString() ?? 'Week ${i + 1}';
-        final amt = ((w['amount'] ?? 0.0) as num).toDouble();
-        final prog = amt > 0 ? (amt / maxWeekly).clamp(0.05, 1.0) : 0.0;
-        weeklyItems.add(DpcPhaseGaugeItem(
-          stage: label,
-          progress: prog,
-          metric: BankTransaction.formatRupees(amt),
-          color: colors[i % colors.length],
-        ));
-      }
-    }
-    if (weeklyItems.isEmpty) {
-      weeklyItems.addAll([
-        const DpcPhaseGaugeItem(
-          stage: 'Week 1',
-          progress: 0.0,
-          metric: '₹0',
-          color: DpcColors.accentPositive,
-        ),
-        const DpcPhaseGaugeItem(
-          stage: 'Week 2',
-          progress: 0.0,
-          metric: '₹0',
-          color: DpcColors.accentPrimary,
-        ),
-        const DpcPhaseGaugeItem(
-          stage: 'Week 3',
-          progress: 0.0,
-          metric: '₹0',
-          color: DpcColors.accentLevel,
-        ),
-        const DpcPhaseGaugeItem(
-          stage: 'Week 4',
-          progress: 0.0,
-          metric: '₹0',
-          color: DpcColors.accentPositive,
-        ),
-      ]);
-    }
-
-
-
-    final shortMonths = [
-      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
-    ];
-
-    String formatTxnDate(DateTime dt) {
-      return '${dt.day} ${shortMonths[dt.month - 1]} ${dt.year}';
-    }
-
-    String formatSyncDate(DateTime dt) {
-      final now = DateTime.now();
-      final diff = now.difference(dt);
-      if (diff.inMinutes < 60) {
-        return diff.inMinutes <= 1 ? 'Just now' : '${diff.inMinutes}m ago';
-      } else if (diff.inHours < 24) {
-        return '${diff.inHours}h ago';
-      } else {
-        return '${dt.day} ${shortMonths[dt.month - 1]}';
-      }
-    }
-
-    return SingleChildScrollView(
-      physics: const BouncingScrollPhysics(),
-      padding: const EdgeInsets.fromLTRB(18, 12, 18, 100),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Screen Title with Temporal & Ingestion Grounding
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'TELEMETRY & ANALYTICS',
-                      style: DpcTypography.badgeTag,
-                    ),
-                    const SizedBox(height: 4),
-                    const Text(
-                      'Cash Flow Telemetry',
-                      style: TextStyle(
-                        color: DpcColors.textPrimary,
-                        fontSize: 24,
-                        fontWeight: FontWeight.w800,
-                        letterSpacing: -0.5,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      weeklyStats.latestTxnTimestamp != null
-                          ? 'As of ${formatTxnDate(weeklyStats.latestTxnTimestamp!)}${weeklyStats.lastSyncedAt != null ? ' • Synced ${formatSyncDate(weeklyStats.lastSyncedAt!)}' : ''}'
-                          : 'Real-time financial telemetry',
-                      style: const TextStyle(
-                        color: DpcColors.textSecondary,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 6,
-                ),
-                decoration: DpcDecorations.cardBase(radius: 20),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      weeklyStats.isLive ? Icons.sensors_rounded : Icons.history_rounded,
-                      size: 14,
-                      color: weeklyStats.isLive ? DpcColors.accentPositive : DpcColors.accentLevel,
-                    ),
-                    const SizedBox(width: 6),
-                    Text(
-                      telemetryAsync.isLoading
-                          ? 'Calculating...'
-                          : (weeklyStats.isLive ? 'Live Feed' : 'Statement Period'),
-                      style: TextStyle(
-                        color: weeklyStats.isLive ? DpcColors.accentPositive : DpcColors.accentLevel,
-                        fontSize: 11,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 16),
-
-          // 1. Segmented Filter Bar wired to period index provider
-          DpcSegmentedFilterBar(
-            filters: filterOptions,
-            selectedIndex: _telemetryFilterIndex,
-            onSelect: (index) {
-              setState(() => _telemetryFilterIndex = index);
-              ref.read(telemetryPeriodIndexProvider.notifier).state = index;
-            },
-          ),
-          const SizedBox(height: 20),
-
-          // 2. 2x2 Telemetry Grid Cards
-          IntrinsicHeight(
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Expanded(
-                  child: DpcTelemetryCard(
-                    data: DpcTelemetryMetricData(
-                      title: 'Savings Retention',
-                      icon: Icons.savings_rounded,
-                      valueText: '${(savingsRatio * 100).round()}%',
-                      fraction: savingsRatio.clamp(0.0, 1.0),
-                      traitTag: savingsRatio > 0.4
-                          ? 'High Savings'
-                          : (savingsRatio > 0 ? 'Normal' : 'No Inflow'),
-                      accentColor: savingsRatio > 0
-                          ? DpcColors.accentPositive
-                          : DpcColors.textMuted,
-                      definition:
-                          'How much of the money that came in you actually kept. For example, 40% means for every ₹100 received, you kept ₹40 as savings.',
-                      formula: '(Total Inflow - Total Outflow) / Total Inflow',
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: DpcTelemetryCard(
-                    data: DpcTelemetryMetricData(
-                      title: 'Discretionary Ratio',
-                      icon: Icons.pie_chart_outline_rounded,
-                      valueText: '${(discretionaryRatio * 100).round()}%',
-                      fraction: discretionaryRatio.clamp(0.0, 1.0),
-                      traitTag: discretionaryRatio > 0.4
-                          ? 'High Impulse'
-                          : 'Disciplined',
-                      accentColor: discretionaryRatio > 0.4
-                          ? DpcColors.accentNegative
-                          : DpcColors.accentPrimary,
-                      definition:
-                          'The share of your spending that went to "wants" (food delivery, shopping, outings) instead of "needs" (bills, rent, groceries).',
-                      formula: 'Discretionary Outflow / Total Outflow',
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 12),
-          IntrinsicHeight(
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Expanded(
-                  child: DpcTelemetryCard(
-                    data: DpcTelemetryMetricData(
-                      title: 'Daily Velocity',
-                      icon: Icons.speed_rounded,
-                      valueText: BankTransaction.formatRupees(dailyVelocity),
-                      fraction: (dailyVelocity / 2000.0).clamp(0.05, 1.0),
-                      traitTag: dailyVelocity > 1500 ? 'High Burn' : 'Balanced',
-                      accentColor: DpcColors.accentLevel,
-                      definition:
-                          'How fast you spend money each day on average. It shows your daily cash burn rate so you can pace yourself.',
-                      formula: 'Total Outflows / Active Days',
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: DpcTelemetryCard(
-                    data: DpcTelemetryMetricData(
-                      title: 'Financial Health',
-                      icon: Icons.health_and_safety_rounded,
-                      valueText: '$healthScore%',
-                      fraction: (healthScore / 100.0).clamp(0.0, 1.0),
-                      traitTag: healthScore >= 80
-                          ? 'Budget Pro'
-                          : (healthScore >= 50 ? 'Stable' : 'Needs Care'),
-                      accentColor: healthScore >= 70
-                          ? DpcColors.accentPositive
-                          : (healthScore >= 50
-                              ? DpcColors.accentLevel
-                              : DpcColors.accentNegative),
-                      definition:
-                          'Your overall money fitness score from 0 to 100. It checks if you are saving enough, keeping impulse spending low, and holding a safe balance.',
-                      formula:
-                          'Weighted composite (Savings Rate + Spend Discipline + Balance Runway)',
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 18),
-
-          // 3. Split Telemetry Card:
-          // Left: Circular radial gauge (Savings / Retention)
-          // Right: Key-value metrics
-          DpcSplitTelemetryCard(
-            title: 'Cash Flow Distribution',
-            gaugeProgress: savingsRatio.clamp(0.0, 1.0),
-            gaugeLabel: 'Retention',
-            gaugeColor: savingsRatio > 0 ? DpcColors.accentPositive : DpcColors.textMuted,
-            keyValues: [
-              (
-                label: 'Total Inflow',
-                value: BankTransaction.formatRupees(totalInflow),
-                color: DpcColors.accentPositive,
-              ),
-              (
-                label: 'Total Outflows',
-                value: BankTransaction.formatRupees(totalSpent),
-                color: DpcColors.accentNegative,
-              ),
-              (
-                label: 'Current Balance',
-                value: BankTransaction.formatRupees(balance),
-                color: DpcColors.textPrimary,
-              ),
-            ],
-          ),
-          const SizedBox(height: 20),
-
-          // 4. Liquid Volume Cards (3-Column Channel Breakdown)
-          const Text(
-            'CHANNEL VOLUME DISTRIBUTION',
-            style: DpcTypography.badgeTag,
-          ),
-          const SizedBox(height: 10),
-          DpcLiquidVolumeRow(
-            items: channelItems,
-          ),
-          const SizedBox(height: 20),
-
-          // 5. Phase-Based Multi-Gauge Cards (Weekly velocity breakdown)
-          const Text('WEEKLY OUTFLOW VELOCITY', style: DpcTypography.badgeTag),
-          const SizedBox(height: 10),
-          DpcPhaseMultiGaugeRow(
-            items: weeklyItems,
-          ),
-        ],
-      ),
+    return _buildSpendingInsightsScreen(
+      context,
+      ref,
+      transactions,
+      false,
+      false,
     );
   }
+
 
   // ==========================================
   // EMPTY, LOADING & ERROR STATES
@@ -2908,6 +3017,170 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
       return const DpcSyncingWaitingView();
     }
 
+    if (!hasActiveConsent) {
+      return Center(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 32),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              // Setthi Mascot with Glowing pedestal
+              Container(
+                width: 96,
+                height: 96,
+                decoration: BoxDecoration(
+                  color: DpcColors.surfaceElevated,
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: DpcColors.surfaceBorder,
+                    width: 1.5,
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: DpcColors.accentPositive.withValues(alpha: 0.15),
+                      blurRadius: 28,
+                      spreadRadius: 2,
+                    ),
+                  ],
+                ),
+                child: const ClipOval(child: AiCompanionRiveWidget(size: 96)),
+              ),
+              const SizedBox(height: 18),
+
+              // Persona Tag
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 5,
+                ),
+                decoration: BoxDecoration(
+                  color: DpcColors.surfaceElevated,
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(color: DpcColors.surfaceBorder),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 6,
+                      height: 6,
+                      decoration: const BoxDecoration(
+                        color: DpcColors.accentPositive,
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    const Text(
+                      'CONNECT YOUR BANK',
+                      style: TextStyle(
+                        color: DpcColors.accentPositive,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: 0.8,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 14),
+
+              // Connect Your Bank Headline
+              const Text(
+                'Connect your bank to unlock Setthi.',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: DpcColors.textPrimary,
+                  fontSize: 20,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: -0.4,
+                  height: 1.25,
+                ),
+              ),
+              const SizedBox(height: 10),
+              const Text(
+                'Upload your bank statement PDF to get instant on-device cashflow analysis, daily safe limits, and AI insights.',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: DpcColors.textSecondary,
+                  fontSize: 13,
+                  height: 1.45,
+                ),
+              ),
+              const SizedBox(height: 24),
+
+              // Connect Your Bank CTA Button
+              SizedBox(
+                width: double.infinity,
+                height: 52,
+                child: ElevatedButton(
+                  onPressed: () {
+                    SetthiOnboardingFlow.show(
+                      context,
+                      initialPage: 1,
+                      onComplete: () {
+                        // Immediately navigate into Setthi AI Chat with icebreaker ready
+                        setState(() => _activeNavIndex = 0);
+                      },
+                    );
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: DpcColors.accentPositive,
+                    foregroundColor: DpcColors.textContrast,
+                    elevation: 0,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                  ),
+                  child: const Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Text(
+                        'Connect Your Bank',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: -0.2,
+                        ),
+                      ),
+                      SizedBox(width: 8),
+                      Icon(Icons.arrow_forward_rounded, size: 18),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+
+              // Direct PDF Statement Link
+              TextButton.icon(
+                onPressed: () {
+                  SetthiOnboardingFlow.show(
+                    context,
+                    initialPage: 1,
+                    onComplete: () {
+                      setState(() => _activeNavIndex = 0);
+                    },
+                  );
+                },
+                icon: const Icon(
+                  Icons.picture_as_pdf_outlined,
+                  size: 16,
+                  color: DpcColors.accentPositive,
+                ),
+                label: const Text(
+                  'Import Bank Statement (PDF)',
+                  style: TextStyle(
+                    color: DpcColors.accentPositive,
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
     return Padding(
       padding: const EdgeInsets.all(24),
       child: Column(
@@ -2919,79 +3192,70 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
               color: DpcColors.surfaceDark,
               shape: BoxShape.circle,
               border: Border.all(
-                color: hasActiveConsent
-                    ? DpcColors.accentPositive.withValues(alpha: 0.35)
-                    : DpcColors.surfaceBorder,
+                color: DpcColors.accentPositive.withValues(alpha: 0.35),
                 width: 1,
               ),
             ),
-            child: Icon(
-              hasActiveConsent
-                  ? Icons.account_balance_rounded
-                  : Icons.account_balance_outlined,
+            child: const Icon(
+              Icons.account_balance_rounded,
               size: 44,
-              color: hasActiveConsent
-                  ? DpcColors.accentPositive
-                  : DpcColors.textSecondary,
+              color: DpcColors.accentPositive,
             ),
           ),
           const SizedBox(height: 20),
-          Text(
-            hasActiveConsent
-                ? 'Bank Connected Successfully'
-                : 'No Bank Account Linked',
-            style: const TextStyle(
+          const Text(
+            'Bank Connected Successfully',
+            style: TextStyle(
               color: DpcColors.textPrimary,
               fontSize: 18,
               fontWeight: FontWeight.w700,
             ),
           ),
           const SizedBox(height: 8),
-          Text(
-            hasActiveConsent
-                ? 'Your Account Aggregator consent is active. Slide below to authorize Setthi to fetch and display your transactions.'
-                : 'Connect your bank account via Setu Account Aggregator to view real-time transactions and balance.',
+          const Text(
+            'Your Account Aggregator consent is active. Slide below to authorize Setthi to fetch and display your transactions.',
             textAlign: TextAlign.center,
-            style: const TextStyle(
+            style: TextStyle(
               color: DpcColors.textSecondary,
               fontSize: 13,
               height: 1.45,
             ),
           ),
-          if (!hasActiveConsent) ...[
-            const SizedBox(height: 24),
-            ElevatedButton.icon(
-              onPressed: () => _showLinkBankBottomSheet(context, ref),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: DpcColors.accentPositive,
-                foregroundColor: DpcColors.textContrast,
-                elevation: 0,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(16),
-                ),
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 24,
-                  vertical: 14,
-                ),
-              ),
-              icon: const Icon(Icons.link_rounded),
-              label: const Text(
-                'Link Bank Account',
-                style: TextStyle(fontWeight: FontWeight.w800),
+          const SizedBox(height: 24),
+          DpcSlideToConfirm(
+            label: 'Slide to Fetch Transactions  ››',
+            completedLabel: 'Authorizing & Fetching Records...',
+            onConfirmed: () async {
+              await ref
+                  .read(transactionFeedProvider.notifier)
+                  .syncTransactions();
+            },
+          ),
+          const SizedBox(height: 12),
+          TextButton.icon(
+            onPressed: () {
+              SetthiOnboardingFlow.show(
+                context,
+                initialPage: 1,
+                onComplete: () {
+                  setState(() => _activeNavIndex = 0);
+                },
+              );
+            },
+            icon: const Icon(
+              Icons.picture_as_pdf_outlined,
+              size: 16,
+              color: DpcColors.accentPositive,
+            ),
+            label: const Text(
+              'Or Import Statement (PDF)',
+              style: TextStyle(
+                color: DpcColors.accentPositive,
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
               ),
             ),
-          ] else ...[
-            const SizedBox(height: 24),
-            DpcSlideToConfirm(
-              label: 'Slide to Fetch Transactions  ››',
-              completedLabel: 'Authorizing & Fetching Data...',
-              onConfirmed: () async {
-                await ref
-                    .read(transactionFeedProvider.notifier)
-                    .syncTransactions();
-              },
-            ),
-          ],
+          ),
         ],
       ),
     );
@@ -3107,33 +3371,34 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
               const SizedBox(height: 24),
               // Action Buttons
               if (isConsentIssue) ...[
-                SizedBox(
-                  width: double.infinity,
-                  height: 46,
-                  child: ElevatedButton.icon(
-                    onPressed: () {
-                      ActiveConsentIdNotifier.deletePersistedConsent();
-                      ref.read(activeConsentIdProvider.notifier).clear();
-                      _showLinkBankBottomSheet(context, ref);
-                    },
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: DpcColors.accentPositive,
-                      foregroundColor: DpcColors.textContrast,
-                      elevation: 0,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(14),
-                      ),
-                    ),
-                    icon: const Icon(Icons.add_link_rounded, size: 18),
-                    label: const Text(
-                      'Connect Bank Account',
-                      style: TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ),
-                ),
+                // [COMMENTED OUT FROM UI - DO NOT REMOVE]
+                // SizedBox(
+                //   width: double.infinity,
+                //   height: 46,
+                //   child: ElevatedButton.icon(
+                //     onPressed: () {
+                //       ActiveConsentIdNotifier.deletePersistedConsent();
+                //       ref.read(activeConsentIdProvider.notifier).clear();
+                //       _showLinkBankBottomSheet(context, ref);
+                //     },
+                //     style: ElevatedButton.styleFrom(
+                //       backgroundColor: DpcColors.accentPositive,
+                //       foregroundColor: DpcColors.textContrast,
+                //       elevation: 0,
+                //       shape: RoundedRectangleBorder(
+                //         borderRadius: BorderRadius.circular(14),
+                //       ),
+                //     ),
+                //     icon: const Icon(Icons.add_link_rounded, size: 18),
+                //     label: const Text(
+                //       'Connect Bank Account',
+                //       style: TextStyle(
+                //         fontSize: 14,
+                //         fontWeight: FontWeight.w700,
+                //       ),
+                //     ),
+                //   ),
+                // ),
                 const SizedBox(height: 10),
                 SizedBox(
                   width: double.infinity,
@@ -3190,27 +3455,28 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
                   ),
                 ),
                 const SizedBox(height: 10),
-                SizedBox(
-                  width: double.infinity,
-                  height: 42,
-                  child: OutlinedButton(
-                    onPressed: () => _showLinkBankBottomSheet(context, ref),
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: DpcColors.textSecondary,
-                      side: const BorderSide(color: DpcColors.surfaceBorder),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(14),
-                      ),
-                    ),
-                    child: const Text(
-                      'Link Different Bank',
-                      style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ),
-                ),
+                // [COMMENTED OUT FROM UI - DO NOT REMOVE]
+                // SizedBox(
+                //   width: double.infinity,
+                //   height: 42,
+                //   child: OutlinedButton(
+                //     onPressed: () => _showLinkBankBottomSheet(context, ref),
+                //     style: OutlinedButton.styleFrom(
+                //       foregroundColor: DpcColors.textSecondary,
+                //       side: const BorderSide(color: DpcColors.surfaceBorder),
+                //       shape: RoundedRectangleBorder(
+                //         borderRadius: BorderRadius.circular(14),
+                //       ),
+                //     ),
+                //     child: const Text(
+                //       'Link Different Bank',
+                //       style: TextStyle(
+                //         fontSize: 13,
+                //         fontWeight: FontWeight.w600,
+                //       ),
+                //     ),
+                //   ),
+                // ),
               ],
               const SizedBox(height: 10),
               SizedBox(
@@ -3307,6 +3573,7 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
   }
 
   /// DPC Styled Link Bank Bottom Sheet
+  // ignore: unused_element
   Future<void> _showLinkBankBottomSheet(
     BuildContext context,
     WidgetRef ref,
@@ -3745,7 +4012,7 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
                             ),
                           ),
                           Text(
-                            txn.isDebit ? 'Debit / Outflow' : 'Credit / Inflow',
+                            txn.isDebit ? 'Money Out (Debit)' : 'Money In (Credit)',
                             style: const TextStyle(
                               color: DpcColors.textSecondary,
                               fontSize: 12,
@@ -3925,14 +4192,52 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
   Widget _buildQuickCategoryRow(BuildContext context, BankTransaction txn) {
     final quickPresets = [
       if (txn.isCredit)
-        ('Income', Icons.account_balance_wallet_rounded, const Color(0xFF34D399)),
-      ('Food & Dining', Icons.restaurant_rounded, const Color(0xFFFC8019)),
-      ('Shopping & Lifestyle', Icons.shopping_bag_rounded, const Color(0xFFA78BFA)),
-      ('Travel & Commute', Icons.directions_car_rounded, const Color(0xFF00C8FF)),
-      ('Bills & Essentials', Icons.bolt_rounded, const Color(0xFFFBBF24)),
-      ('Investments & Transfers', Icons.trending_up_rounded, const Color(0xFF32D74B)),
+        (
+          'Income',
+          Icons.account_balance_wallet_rounded,
+          const Color(0xFF22C55E),
+        ),
+      (
+        'Eating out, tea & snacks',
+        Icons.restaurant_rounded,
+        const Color(0xFFFC8019),
+      ),
+      (
+        'Groceries & daily needs',
+        Icons.local_grocery_store_rounded,
+        const Color(0xFF10B981),
+      ),
+      (
+        'Local shops & stalls',
+        Icons.store_rounded,
+        const Color(0xFF3B82F6),
+      ),
+      (
+        'Fuel',
+        Icons.local_gas_station_rounded,
+        const Color(0xFFF59E0B),
+      ),
+      (
+        'Bills & recharge',
+        Icons.receipt_long_rounded,
+        const Color(0xFFEAB308),
+      ),
+      (
+        'Shopping',
+        Icons.shopping_bag_rounded,
+        const Color(0xFFA855F7),
+      ),
+      (
+        'Subscriptions & tools',
+        Icons.subscriptions_rounded,
+        const Color(0xFFEC4899),
+      ),
       if (!txn.isCredit)
-        ('Income', Icons.account_balance_wallet_rounded, const Color(0xFF34D399)),
+        (
+          'Income',
+          Icons.account_balance_wallet_rounded,
+          const Color(0xFF22C55E),
+        ),
       ('Custom', Icons.tune_rounded, const Color(0xFFB8F5D8)),
     ];
 
@@ -4085,8 +4390,6 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
       },
     );
   }
-
-
 }
 
 class _CategoryPreset {
@@ -4125,34 +4428,74 @@ class _CategoryPickerSheetState extends State<_CategoryPickerSheet> {
       color: Color(0xFFB8F5D8),
     ),
     _CategoryPreset(
-      name: 'Income',
-      icon: Icons.account_balance_wallet_rounded,
-      color: Color(0xFF34D399),
-    ),
-    _CategoryPreset(
-      name: 'Food & Dining',
+      name: 'Eating out, tea & snacks',
       icon: Icons.restaurant_rounded,
       color: Color(0xFFFC8019),
     ),
     _CategoryPreset(
-      name: 'Shopping & Lifestyle',
-      icon: Icons.shopping_bag_rounded,
-      color: Color(0xFFA78BFA),
+      name: 'Groceries & daily needs',
+      icon: Icons.local_grocery_store_rounded,
+      color: Color(0xFF10B981),
     ),
     _CategoryPreset(
-      name: 'Travel & Commute',
+      name: 'Fuel',
+      icon: Icons.local_gas_station_rounded,
+      color: Color(0xFFF59E0B),
+    ),
+    _CategoryPreset(
+      name: 'Gaming',
+      icon: Icons.sports_esports_rounded,
+      color: Color(0xFF8B5CF6),
+    ),
+    _CategoryPreset(
+      name: 'Subscriptions & tools',
+      icon: Icons.subscriptions_rounded,
+      color: Color(0xFFEC4899),
+    ),
+    _CategoryPreset(
+      name: 'Travel & transport',
       icon: Icons.directions_car_rounded,
-      color: Color(0xFF00C8FF),
+      color: Color(0xFF06B6D4),
     ),
     _CategoryPreset(
-      name: 'Bills & Essentials',
-      icon: Icons.bolt_rounded,
-      color: Color(0xFFFBBF24),
+      name: 'Movies & fun',
+      icon: Icons.movie_rounded,
+      color: Color(0xFFF43F5E),
     ),
     _CategoryPreset(
-      name: 'Investments & Transfers',
-      icon: Icons.trending_up_rounded,
-      color: Color(0xFF32D74B),
+      name: 'Medical & pharmacy',
+      icon: Icons.local_pharmacy_rounded,
+      color: Color(0xFF14B8A6),
+    ),
+    _CategoryPreset(
+      name: 'Bills & recharge',
+      icon: Icons.receipt_long_rounded,
+      color: Color(0xFFEAB308),
+    ),
+    _CategoryPreset(
+      name: 'Shopping',
+      icon: Icons.shopping_bag_rounded,
+      color: Color(0xFFA855F7),
+    ),
+    _CategoryPreset(
+      name: 'Pan shops & small stalls',
+      icon: Icons.storefront_rounded,
+      color: Color(0xFFFB923C),
+    ),
+    _CategoryPreset(
+      name: 'Local shops & stalls',
+      icon: Icons.store_rounded,
+      color: Color(0xFF3B82F6),
+    ),
+    _CategoryPreset(
+      name: 'Local shops',
+      icon: Icons.shopping_cart_rounded,
+      color: Color(0xFF6366F1),
+    ),
+    _CategoryPreset(
+      name: 'Income',
+      icon: Icons.account_balance_wallet_rounded,
+      color: Color(0xFF22C55E),
     ),
   ];
 
@@ -4189,8 +4532,9 @@ class _CategoryPickerSheetState extends State<_CategoryPickerSheet> {
       useRootNavigator: true,
       builder: (dialogCtx) => _CustomCategoryDialog(
         merchantName: widget.txn.cleanMerchantName,
-        initialValue:
-            _isCustomActive(widget.txn.category) ? widget.txn.category : null,
+        initialValue: _isCustomActive(widget.txn.category)
+            ? widget.txn.category
+            : null,
         onApply: (category) {
           _selectCategory(category);
         },
@@ -4302,16 +4646,18 @@ class _CategoryPickerSheetState extends State<_CategoryPickerSheet> {
                                   vertical: 1.5,
                                 ),
                                 decoration: BoxDecoration(
-                                  color: (widget.txn.isCredit
-                                          ? DpcColors.accentPositive
-                                          : DpcColors.accentNegative)
-                                      .withValues(alpha: 0.12),
+                                  color:
+                                      (widget.txn.isCredit
+                                              ? DpcColors.accentPositive
+                                              : DpcColors.accentNegative)
+                                          .withValues(alpha: 0.12),
                                   borderRadius: BorderRadius.circular(4),
                                   border: Border.all(
-                                    color: (widget.txn.isCredit
-                                            ? DpcColors.accentPositive
-                                            : DpcColors.accentNegative)
-                                        .withValues(alpha: 0.25),
+                                    color:
+                                        (widget.txn.isCredit
+                                                ? DpcColors.accentPositive
+                                                : DpcColors.accentNegative)
+                                            .withValues(alpha: 0.25),
                                     width: 0.8,
                                   ),
                                 ),
@@ -4334,8 +4680,8 @@ class _CategoryPickerSheetState extends State<_CategoryPickerSheet> {
                                           : '- ${widget.txn.formattedAmount} Debited',
                                       style: TextStyle(
                                         color: widget.txn.isCredit
-                                          ? DpcColors.accentPositive
-                                          : DpcColors.accentNegative,
+                                            ? DpcColors.accentPositive
+                                            : DpcColors.accentNegative,
                                         fontSize: 10.5,
                                         fontWeight: FontWeight.w700,
                                         letterSpacing: -0.2,
@@ -4447,8 +4793,9 @@ class _CategoryPickerSheetState extends State<_CategoryPickerSheet> {
                             width: 32,
                             height: 32,
                             decoration: BoxDecoration(
-                              color: const Color(0xFFB8F5D8)
-                                  .withValues(alpha: 0.15),
+                              color: const Color(
+                                0xFFB8F5D8,
+                              ).withValues(alpha: 0.15),
                               borderRadius: BorderRadius.circular(8),
                             ),
                             child: const Icon(
@@ -4481,10 +4828,12 @@ class _CategoryPickerSheetState extends State<_CategoryPickerSheet> {
                                           vertical: 1.5,
                                         ),
                                         decoration: BoxDecoration(
-                                          color: const Color(0xFFB8F5D8)
-                                              .withValues(alpha: 0.2),
-                                          borderRadius:
-                                              BorderRadius.circular(4),
+                                          color: const Color(
+                                            0xFFB8F5D8,
+                                          ).withValues(alpha: 0.2),
+                                          borderRadius: BorderRadius.circular(
+                                            4,
+                                          ),
                                         ),
                                         child: Text(
                                           widget.txn.category!,
@@ -4540,10 +4889,14 @@ class _CategoryPickerSheetState extends State<_CategoryPickerSheet> {
                             vertical: 12,
                           ),
                           decoration: BoxDecoration(
-                            color: const Color(0xFFB8F5D8).withValues(alpha: 0.1),
+                            color: const Color(
+                              0xFFB8F5D8,
+                            ).withValues(alpha: 0.1),
                             borderRadius: BorderRadius.circular(12),
                             border: Border.all(
-                              color: const Color(0xFFB8F5D8).withValues(alpha: 0.4),
+                              color: const Color(
+                                0xFFB8F5D8,
+                              ).withValues(alpha: 0.4),
                               width: 1,
                             ),
                           ),
@@ -4552,8 +4905,9 @@ class _CategoryPickerSheetState extends State<_CategoryPickerSheet> {
                               Container(
                                 padding: const EdgeInsets.all(6),
                                 decoration: BoxDecoration(
-                                  color: const Color(0xFFB8F5D8)
-                                      .withValues(alpha: 0.2),
+                                  color: const Color(
+                                    0xFFB8F5D8,
+                                  ).withValues(alpha: 0.2),
                                   shape: BoxShape.circle,
                                 ),
                                 child: const Icon(
@@ -4603,18 +4957,18 @@ class _CategoryPickerSheetState extends State<_CategoryPickerSheet> {
                       itemCount: filteredPresets.length,
                       gridDelegate:
                           const SliverGridDelegateWithFixedCrossAxisCount(
-                        crossAxisCount: 2,
-                        crossAxisSpacing: 10,
-                        mainAxisSpacing: 10,
-                        childAspectRatio: 2.7,
-                      ),
+                            crossAxisCount: 2,
+                            crossAxisSpacing: 10,
+                            mainAxisSpacing: 10,
+                            childAspectRatio: 2.7,
+                          ),
                       itemBuilder: (context, index) {
                         final preset = filteredPresets[index];
                         final isCustom = preset.name == 'Custom';
                         final isCurrent = isCustom
                             ? isCustomActive
                             : widget.txn.category?.toLowerCase() ==
-                                preset.name.toLowerCase();
+                                  preset.name.toLowerCase();
 
                         return InkWell(
                           onTap: () {
@@ -4897,7 +5251,8 @@ class _CustomCategoryDialogState extends State<_CustomCategoryDialog> {
               spacing: 6,
               runSpacing: 6,
               children: _popularSuggestions.map((suggestion) {
-                final isSelected = _controller.text.trim().toLowerCase() ==
+                final isSelected =
+                    _controller.text.trim().toLowerCase() ==
                     suggestion.toLowerCase();
                 return InkWell(
                   onTap: () {
@@ -4932,8 +5287,9 @@ class _CustomCategoryDialogState extends State<_CustomCategoryDialog> {
                             ? const Color(0xFFB8F5D8)
                             : DpcColors.textSecondary,
                         fontSize: 11.5,
-                        fontWeight:
-                            isSelected ? FontWeight.w700 : FontWeight.w500,
+                        fontWeight: isSelected
+                            ? FontWeight.w700
+                            : FontWeight.w500,
                       ),
                     ),
                   ),
@@ -4971,8 +5327,9 @@ class _CustomCategoryDialogState extends State<_CustomCategoryDialog> {
                     onPressed: _canSave ? _submit : null,
                     style: ElevatedButton.styleFrom(
                       backgroundColor: const Color(0xFFB8F5D8),
-                      disabledBackgroundColor:
-                          const Color(0xFFB8F5D8).withValues(alpha: 0.2),
+                      disabledBackgroundColor: const Color(
+                        0xFFB8F5D8,
+                      ).withValues(alpha: 0.2),
                       padding: const EdgeInsets.symmetric(vertical: 13),
                       elevation: 0,
                       shape: RoundedRectangleBorder(
@@ -5020,16 +5377,16 @@ class _DpcSyncingWaitingViewState extends State<DpcSyncingWaitingView>
       'subtitle': 'Connecting via RBI Regulated Account Aggregator...',
     },
     {
-      'title': 'Creating Encrypted Session',
-      'subtitle': 'Establishing 256-bit bank data pipeline...',
+      'title': 'Connecting Securely',
+      'subtitle': 'Connecting with bank-level encryption...',
     },
     {
-      'title': 'Fetching & Decrypting Records',
-      'subtitle': 'Retrieving bank transactions & balance logs...',
+      'title': 'Fetching Transactions',
+      'subtitle': 'Retrieving transactions and account balance...',
     },
     {
-      'title': 'Organizing Intelligence Feed',
-      'subtitle': 'Categorizing merchants and computing cash flow...',
+      'title': 'Organizing Your Transactions',
+      'subtitle': 'Sorting merchants and calculating your budget...',
     },
   ];
 
@@ -5168,7 +5525,10 @@ class _DpcSyncingWaitingViewState extends State<DpcSyncingWaitingView>
 
               // Security & Reassurance Tag
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 10,
+                ),
                 decoration: BoxDecoration(
                   color: DpcColors.bgOled,
                   borderRadius: BorderRadius.circular(14),

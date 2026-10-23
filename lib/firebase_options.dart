@@ -45,12 +45,11 @@ class DefaultFirebaseOptions {
 
   static const FirebaseOptions android = FirebaseOptions(
     apiKey: 'AIzaSyDtHGeCiRbhO9lHJiHqNd3YlmdA7sdxoeQ',
-    appId: '1:399589665504:android:8b5aa67a3402ce2ca8be85',
+    appId: '1:399589665504:android:5e772d9037a131d5a8be85',
     messagingSenderId: '399589665504',
     projectId: 'stthi-4fb6b',
     storageBucket: 'stthi-4fb6b.firebasestorage.app',
   );
-
   static const FirebaseOptions ios = FirebaseOptions(
     apiKey: 'AIzaSyAiTmvcQzNeUqrfZpdPDAF7yWTZfGXNl70',
     appId: '1:399589665504:ios:dceef4f633a449aea8be85',
@@ -59,7 +58,6 @@ class DefaultFirebaseOptions {
     storageBucket: 'stthi-4fb6b.firebasestorage.app',
     iosBundleId: 'com.setthi.app.signin',
   );
-
   static const FirebaseOptions macos = FirebaseOptions(
     apiKey: 'AIzaSyAiTmvcQzNeUqrfZpdPDAF7yWTZfGXNl70',
     appId: '1:399589665504:ios:06416e0fd5d28ac2a8be85',

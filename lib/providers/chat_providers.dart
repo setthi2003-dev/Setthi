@@ -45,6 +45,44 @@ final aiCreditsProvider = NotifierProvider<AiCreditsNotifier, int>(
   AiCreditsNotifier.new,
 );
 
+/// Dynamic follow-up suggestion chips sent from Setthi AI
+class DynamicSuggestionsNotifier extends Notifier<List<String>> {
+  @override
+  List<String> build() => const [];
+
+  void setSuggestions(List<String> suggestions) {
+    state = suggestions;
+  }
+
+  void clear() {
+    state = const [];
+  }
+}
+
+final dynamicSuggestionsProvider =
+    NotifierProvider<DynamicSuggestionsNotifier, List<String>>(
+  DynamicSuggestionsNotifier.new,
+);
+
+/// Active conversational session ID to thread follow-up queries
+class ChatSessionIdNotifier extends Notifier<String?> {
+  @override
+  String? build() => null;
+
+  void setSessionId(String? id) {
+    state = id;
+  }
+
+  void clear() {
+    state = null;
+  }
+}
+
+final chatSessionIdProvider =
+    NotifierProvider<ChatSessionIdNotifier, String?>(
+  ChatSessionIdNotifier.new,
+);
+
 /// State management for the Setthi AI conversation stream and history
 class ChatMessagesNotifier extends AsyncNotifier<List<ChatMessage>> {
   bool _isSending = false;
@@ -70,6 +108,9 @@ class ChatMessagesNotifier extends AsyncNotifier<List<ChatMessage>> {
 
     final currentCredits = ref.read(aiCreditsProvider);
     if (currentCredits <= 0) return;
+
+    // Reset suggestions while processing new query
+    ref.read(dynamicSuggestionsProvider.notifier).clear();
 
     _isSending = true;
 
@@ -103,12 +144,14 @@ class ChatMessagesNotifier extends AsyncNotifier<List<ChatMessage>> {
     } catch (_) {}
 
     final chatService = ref.read(chatServiceProvider);
+    final activeSessionId = ref.read(chatSessionIdProvider);
     String accumulatedText = '';
 
     try {
       final stream = chatService.sendMessage(
         prompt: trimmedPrompt,
         accessToken: accessToken,
+        sessionId: activeSessionId,
       );
 
       await for (final event in stream) {
@@ -121,12 +164,22 @@ class ChatMessagesNotifier extends AsyncNotifier<List<ChatMessage>> {
               isStreaming: true,
             );
 
-          case ChatDoneEvent(:final remainingCredits):
+          case ChatDoneEvent(
+            :final remainingCredits,
+            :final sessionId,
+            :final suggestions,
+          ):
             _updateAssistantBubble(
               id: assistantPlaceholderId,
               content: accumulatedText,
               isStreaming: false,
             );
+            if (sessionId != null && sessionId.isNotEmpty) {
+              ref.read(chatSessionIdProvider.notifier).setSessionId(sessionId);
+            }
+            if (suggestions != null && suggestions.isNotEmpty) {
+              ref.read(dynamicSuggestionsProvider.notifier).setSuggestions(suggestions);
+            }
             if (remainingCredits != null) {
               ref.read(aiCreditsProvider.notifier).setCredits(remainingCredits);
             } else {
@@ -185,6 +238,8 @@ class ChatMessagesNotifier extends AsyncNotifier<List<ChatMessage>> {
   /// Clears the chat conversation locally and removes all chat message records from the backend
   Future<bool> clearHistory() async {
     state = const AsyncData([]);
+    ref.read(chatSessionIdProvider.notifier).clear();
+    ref.read(dynamicSuggestionsProvider.notifier).clear();
 
     try {
       final dbService = ref.read(supabaseDbServiceProvider);
@@ -193,9 +248,58 @@ class ChatMessagesNotifier extends AsyncNotifier<List<ChatMessage>> {
       return false;
     }
   }
+
+  /// Seeds an introductory assistant icebreaker message from onboarding
+  void seedIcebreakerMessage(String content) {
+    final currentList = state.value ?? [];
+    if (currentList.isNotEmpty) return; // Don't overwrite if history exists
+    final assistantMsg = ChatMessage(
+      id: _generateId(),
+      role: ChatRole.assistant,
+      content: content,
+      createdAt: DateTime.now(),
+      isStreaming: false,
+    );
+    state = AsyncData([assistantMsg]);
+  }
 }
 
 final chatMessagesProvider =
     AsyncNotifierProvider<ChatMessagesNotifier, List<ChatMessage>>(
       ChatMessagesNotifier.new,
     );
+
+/// Cleo-style customized icebreaker data generated during onboarding
+class SetthiIcebreakerData {
+  final String greeting;
+  final List<String> promptChips;
+  final String? topCategory;
+  final double? topCategoryAmount;
+  final double? totalDebitAmount;
+
+  const SetthiIcebreakerData({
+    required this.greeting,
+    required this.promptChips,
+    this.topCategory,
+    this.topCategoryAmount,
+    this.totalDebitAmount,
+  });
+}
+
+class SetthiIcebreakerNotifier extends Notifier<SetthiIcebreakerData?> {
+  @override
+  SetthiIcebreakerData? build() => null;
+
+  void setIcebreaker(SetthiIcebreakerData data) {
+    state = data;
+  }
+
+  void clear() {
+    state = null;
+  }
+}
+
+final setthiIcebreakerProvider =
+    NotifierProvider<SetthiIcebreakerNotifier, SetthiIcebreakerData?>(
+  SetthiIcebreakerNotifier.new,
+);

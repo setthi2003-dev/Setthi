@@ -82,12 +82,15 @@ class AuthService {
   Future<bool> signInWithGoogle() async {
     const webClientId =
         '473884945637-in2cv7vk192k7se5vvad71s05qr75and.apps.googleusercontent.com';
+    const iosClientId =
+        '473884945637-150nfrlqch91jg9f833u6ni8v6ju00rv.apps.googleusercontent.com';
     const redirectUrl = kIsWeb ? null : 'io.supabase.setthi://login-callback';
 
     // 1. Attempt Native Google Sign-In
     if (!kIsWeb) {
       try {
         final googleSignIn = GoogleSignIn(
+          clientId: (!kIsWeb && Platform.isIOS) ? iosClientId : null,
           serverClientId: webClientId, // Required for Supabase aud verification
           scopes: ['email', 'profile', 'openid'],
         );
@@ -166,7 +169,9 @@ class AuthService {
         );
         final payload = jsonDecode(payloadJson) as Map<String, dynamic>;
         tokenAudience = payload['aud']?.toString();
-        debugPrint('[AppleSignIn] Identity token audience (aud): $tokenAudience');
+        debugPrint(
+          '[AppleSignIn] Identity token audience (aud): $tokenAudience',
+        );
       }
     } catch (_) {}
 
@@ -194,10 +199,10 @@ class AuthService {
       final user = response.user!;
       String? fullName;
       if (credential.givenName != null || credential.familyName != null) {
-        fullName = [credential.givenName, credential.familyName]
-            .where((part) => part != null && part.isNotEmpty)
-            .join(' ')
-            .trim();
+        fullName = [
+          credential.givenName,
+          credential.familyName,
+        ].where((part) => part != null && part.isNotEmpty).join(' ').trim();
 
         if (fullName.isNotEmpty) {
           try {
@@ -314,10 +319,7 @@ class AuthService {
     OtpType type = OtpType.signup,
   }) async {
     try {
-      await _effectiveClient.auth.resend(
-        type: type,
-        email: email.trim(),
-      );
+      await _effectiveClient.auth.resend(type: type, email: email.trim());
     } catch (_) {
       await _effectiveClient.auth.resend(
         type: OtpType.email,
@@ -331,22 +333,46 @@ class AuthService {
     await _effectiveClient.auth.signOut();
   }
 
-  /// Permanently deletes the current user account and purges all financial data
-  Future<bool> deleteAccount() async {
+  /// Permanently deletes the current user account and purges all financial data.
+  /// If [signOutAfter] is true (default), signs out the user immediately.
+  /// Set [signOutAfter] to false when the caller needs to dismiss dialogs/modals
+  /// before the authentication state transitions to signed out.
+  Future<bool> deleteAccount({bool signOutAfter = true}) async {
     final uid = currentUser?.id;
-    if (uid == null) return false;
-
-    try {
-      await _effectiveClient.rpc('delete_user_account');
-    } catch (e) {
-      debugPrint('[AuthService] Error executing delete_user_account RPC: $e');
-      rethrow;
+    if (uid == null) {
+      throw const AuthException('No authenticated user session found.');
     }
 
     try {
-      await _effectiveClient.auth.signOut();
-    } catch (e) {
-      debugPrint('[AuthService] Post-deletion sign-out warning: $e');
+      await _effectiveClient.rpc('delete_user_account');
+    } on PostgrestException catch (e, stack) {
+      debugPrint(
+        '[AuthService] PostgrestException in delete_user_account: ${e.message} '
+        '(Code: ${e.code}, Details: ${e.details})\n$stack',
+      );
+      throw Exception(
+        e.message.isNotEmpty
+            ? e.message
+            : 'Database error occurred during account deletion.',
+      );
+    } on SocketException catch (e) {
+      debugPrint('[AuthService] Network error during account deletion: $e');
+      throw const SocketException(
+        'Unable to reach server. Please check your internet connection.',
+      );
+    } catch (e, stack) {
+      debugPrint(
+        '[AuthService] Unexpected error executing delete_user_account RPC: $e\n$stack',
+      );
+      rethrow;
+    }
+
+    if (signOutAfter) {
+      try {
+        await _effectiveClient.auth.signOut();
+      } catch (e) {
+        debugPrint('[AuthService] Post-deletion sign-out warning: $e');
+      }
     }
 
     return true;

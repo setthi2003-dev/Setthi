@@ -6,7 +6,6 @@ import '../config/dpc_tokens.dart';
 import '../models/chat_message_model.dart';
 import '../providers/chat_providers.dart';
 import 'ai_companion_rive_widget.dart';
-import 'dpc_gauges.dart';
 
 /// Full DPC Styled Bottom Sheet Modal or Dedicated Full Page for Setthi AI
 class SetthiAiSheet extends ConsumerStatefulWidget {
@@ -40,7 +39,7 @@ class _SetthiAiSheetState extends ConsumerState<SetthiAiSheet> {
 
   static const List<String> _quickPrompts = [
     'How much did I spend this week?',
-    'What is my current balance?',
+    'What are my recurring bills?',
     'Top 3 food orders lately',
   ];
 
@@ -60,16 +59,50 @@ class _SetthiAiSheetState extends ConsumerState<SetthiAiSheet> {
     super.dispose();
   }
 
-  void _scrollToBottom() {
+  bool _hasInitialScrolled = false;
+  double _previousBottomInset = 0.0;
+
+  void _scrollToBottom({bool immediate = false}) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_scrollController.hasClients) {
-        _scrollController.animateTo(
-          _scrollController.position.maxScrollExtent,
-          duration: const Duration(milliseconds: 250),
-          curve: Curves.easeOutQuad,
-        );
-      }
+      if (!mounted || !_scrollController.hasClients) return;
+      _performScroll(immediate: immediate, attempt: 0);
     });
+  }
+
+  void _performScroll({required bool immediate, required int attempt}) {
+    if (!mounted || !_scrollController.hasClients) return;
+    final maxScroll = _scrollController.position.maxScrollExtent;
+
+    if (maxScroll <= 0) {
+      if (attempt < 4) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted || !_scrollController.hasClients) return;
+          _performScroll(immediate: immediate, attempt: attempt + 1);
+        });
+      }
+      return;
+    }
+
+    if (immediate) {
+      _scrollController.jumpTo(maxScroll);
+    } else {
+      _scrollController.animateTo(
+        maxScroll,
+        duration: const Duration(milliseconds: 200),
+        curve: Curves.easeOutQuad,
+      );
+    }
+
+    // Because ListView.builder computes layout lazily, maxScrollExtent expands
+    // as subsequent items are built. Continue adjusting until settled at the true bottom.
+    if (attempt < 4) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || !_scrollController.hasClients) return;
+        if ((_scrollController.position.maxScrollExtent - _scrollController.position.pixels).abs() > 2.0) {
+          _performScroll(immediate: immediate, attempt: attempt + 1);
+        }
+      });
+    }
   }
 
   void _handleSend([String? textToSend]) {
@@ -81,6 +114,7 @@ class _SetthiAiSheetState extends ConsumerState<SetthiAiSheet> {
 
     HapticFeedback.lightImpact();
     _inputController.clear();
+    ref.read(dynamicSuggestionsProvider.notifier).clear();
     ref.read(chatMessagesProvider.notifier).sendMessage(text);
     _scrollToBottom();
   }
@@ -92,9 +126,31 @@ class _SetthiAiSheetState extends ConsumerState<SetthiAiSheet> {
     final credits = ref.watch(aiCreditsProvider);
     final isZeroCredits = credits <= 0;
 
-    // Listen to message updates to auto-scroll as tokens arrive
+    // Reset initial scroll flag if chat is cleared
+    if (messagesAsync.hasValue && (messagesAsync.value?.isEmpty ?? true)) {
+      _hasInitialScrolled = false;
+    }
+
+    // Automatically scroll to bottom when page is opened with existing messages
+    if (!_hasInitialScrolled && messagesAsync.hasValue && (messagesAsync.value?.isNotEmpty ?? false)) {
+      _hasInitialScrolled = true;
+      _scrollToBottom(immediate: true);
+    }
+
+    // Automatically keep latest message in view when keyboard opens
+    if (bottomInset > _previousBottomInset && _hasInitialScrolled) {
+      _scrollToBottom(immediate: false);
+    }
+    _previousBottomInset = bottomInset;
+
+    // Listen to message updates to auto-scroll as tokens arrive or state changes
     ref.listen(chatMessagesProvider, (prev, next) {
-      _scrollToBottom();
+      if (!_hasInitialScrolled && next.hasValue && (next.value?.isNotEmpty ?? false)) {
+        _hasInitialScrolled = true;
+        _scrollToBottom(immediate: true);
+      } else {
+        _scrollToBottom(immediate: false);
+      }
     });
 
     final mainBody = Column(
@@ -144,6 +200,17 @@ class _SetthiAiSheetState extends ConsumerState<SetthiAiSheet> {
                 return _buildEmptyState();
               }
 
+              final icebreaker = ref.watch(setthiIcebreakerProvider);
+              final dynamicSuggestions = ref.watch(dynamicSuggestionsProvider);
+              final showIcebreakerChips = icebreaker != null &&
+                  messages.length == 1 &&
+                  messages.first.role == ChatRole.assistant;
+              final showDynamicSuggestions = !showIcebreakerChips &&
+                  dynamicSuggestions.isNotEmpty &&
+                  messages.isNotEmpty &&
+                  messages.last.role == ChatRole.assistant &&
+                  !messages.last.isStreaming;
+
               return ListView.builder(
                 controller: _scrollController,
                 keyboardDismissBehavior:
@@ -152,10 +219,18 @@ class _SetthiAiSheetState extends ConsumerState<SetthiAiSheet> {
                   horizontal: 16,
                   vertical: 14,
                 ),
-                itemCount: messages.length,
+                itemCount: messages.length +
+                    (showIcebreakerChips ? 1 : 0) +
+                    (showDynamicSuggestions ? 1 : 0),
                 itemBuilder: (context, index) {
-                  final msg = messages[index];
-                  return _buildMessageBubble(msg);
+                  if (index < messages.length) {
+                    final msg = messages[index];
+                    return _buildMessageBubble(msg);
+                  }
+                  if (showIcebreakerChips) {
+                    return _buildIcebreakerChips(icebreaker.promptChips);
+                  }
+                  return _buildDynamicSuggestions(dynamicSuggestions);
                 },
               );
             },
@@ -286,28 +361,15 @@ class _SetthiAiSheetState extends ConsumerState<SetthiAiSheet> {
                 width: 1,
               ),
             ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(
-                  Icons.bolt_rounded,
-                  size: 14,
-                  color: credits > 0
-                      ? DpcColors.textPrimary
-                      : DpcColors.accentNegative,
-                ),
-                const SizedBox(width: 3),
-                Text(
-                  '$credits credits',
-                  style: TextStyle(
-                    color: credits > 0
-                        ? DpcColors.textPrimary
-                        : DpcColors.accentNegative,
-                    fontSize: 11.5,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ],
+            child: Text(
+              '$credits credits',
+              style: TextStyle(
+                color: credits > 0
+                    ? DpcColors.textPrimary
+                    : DpcColors.accentNegative,
+                fontSize: 11.5,
+                fontWeight: FontWeight.w700,
+              ),
             ),
           ),
           const SizedBox(width: 8),
@@ -336,6 +398,11 @@ class _SetthiAiSheetState extends ConsumerState<SetthiAiSheet> {
   }
 
   Widget _buildEmptyState() {
+    final icebreaker = ref.watch(setthiIcebreakerProvider);
+    if (icebreaker != null) {
+      return _buildIcebreakerEmptyState(icebreaker);
+    }
+
     return SingleChildScrollView(
       physics: const BouncingScrollPhysics(),
       padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
@@ -374,7 +441,7 @@ class _SetthiAiSheetState extends ConsumerState<SetthiAiSheet> {
           ),
           const SizedBox(height: 6),
           const Text(
-            'Verified bank ledger intelligence • Deterministic tools • Zero guessing',
+            'Clear answers from your transactions • Safe & private • No guesswork',
             style: TextStyle(
               color: DpcColors.textSecondary,
               fontSize: 12,
@@ -442,6 +509,246 @@ class _SetthiAiSheetState extends ConsumerState<SetthiAiSheet> {
                             color: DpcColors.textPrimary,
                             fontSize: 13,
                             fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ),
+                      const Icon(
+                        Icons.arrow_forward_rounded,
+                        size: 15,
+                        color: DpcColors.textSecondary,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          }),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildIcebreakerChips(List<String> chips) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 8, bottom: 18, left: 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Text(
+                'QUICK REPLIES',
+                style: TextStyle(
+                  color: DpcColors.textMuted,
+                  fontSize: 10.5,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 0.8,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: chips.map((chip) {
+              return ActionChip(
+                onPressed: () => _handleSend(chip),
+                avatar: const Icon(Icons.arrow_outward_rounded, size: 13, color: DpcColors.accentPositive),
+                label: Text(
+                  chip,
+                  style: const TextStyle(
+                    color: DpcColors.textPrimary,
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                backgroundColor: DpcColors.surfaceElevated,
+                side: const BorderSide(color: DpcColors.surfaceBorder),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              );
+            }).toList(),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDynamicSuggestions(List<String> chips) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 8, bottom: 18, left: 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'SUGGESTED NEXT',
+            style: TextStyle(
+              color: DpcColors.textMuted,
+              fontSize: 10.5,
+              fontWeight: FontWeight.w800,
+              letterSpacing: 0.8,
+            ),
+          ),
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: chips.map((chip) {
+              return ActionChip(
+                onPressed: () {
+                  ref.read(dynamicSuggestionsProvider.notifier).clear();
+                  _handleSend(chip);
+                },
+                avatar: const Icon(
+                  Icons.arrow_outward_rounded,
+                  size: 13,
+                  color: DpcColors.accentPositive,
+                ),
+                label: Text(
+                  chip,
+                  style: const TextStyle(
+                    color: DpcColors.textPrimary,
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                backgroundColor: DpcColors.surfaceElevated,
+                side: const BorderSide(color: DpcColors.surfaceBorder),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              );
+            }).toList(),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildIcebreakerEmptyState(SetthiIcebreakerData icebreaker) {
+    return SingleChildScrollView(
+      physics: const BouncingScrollPhysics(),
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          // Animated Companion Avatar
+          Container(
+            width: 108,
+            height: 108,
+            decoration: BoxDecoration(
+              color: DpcColors.surfaceElevated,
+              shape: BoxShape.circle,
+              border: Border.all(
+                color: DpcColors.surfaceBorder,
+                width: 1.5,
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: DpcColors.accentPositive.withValues(alpha: 0.15),
+                  blurRadius: 24,
+                  spreadRadius: 2,
+                ),
+              ],
+            ),
+            child: const ClipOval(
+              child: AiCompanionRiveWidget(
+                size: 105,
+                fit: Fit.cover,
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+
+          // Cleo Badge
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+            decoration: BoxDecoration(
+              color: DpcColors.surfaceElevated,
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: DpcColors.surfaceBorder),
+            ),
+            child: const Text(
+              'SETTHI RADAR READY',
+              style: TextStyle(
+                color: DpcColors.accentPositive,
+                fontSize: 11,
+                fontWeight: FontWeight.w800,
+                letterSpacing: 0.8,
+              ),
+            ),
+          ),
+          const SizedBox(height: 14),
+
+          // Speech Bubble with Cleo's witty greeting
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(18),
+            decoration: BoxDecoration(
+              color: DpcColors.surfaceElevated,
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: DpcColors.accentPositive.withValues(alpha: 0.4)),
+            ),
+            child: Text(
+              icebreaker.greeting,
+              style: const TextStyle(
+                color: DpcColors.textPrimary,
+                fontSize: 15,
+                fontWeight: FontWeight.w600,
+                height: 1.45,
+              ),
+              textAlign: TextAlign.center,
+            ),
+          ),
+          const SizedBox(height: 24),
+
+          // Prompt Action Chips
+          Align(
+            alignment: Alignment.centerLeft,
+            child: Text(
+              'SUGGESTED QUESTIONS',
+              style: TextStyle(
+                color: DpcColors.textMuted,
+                fontSize: 10.5,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 0.8,
+              ),
+            ),
+          ),
+          const SizedBox(height: 10),
+          ...icebreaker.promptChips.map((chip) {
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: InkWell(
+                onTap: () => _handleSend(chip),
+                borderRadius: BorderRadius.circular(14),
+                child: Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 13,
+                  ),
+                  decoration: BoxDecoration(
+                    color: DpcColors.surfaceElevated,
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(
+                      color: DpcColors.surfaceBorder,
+                      width: 1,
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          chip,
+                          style: const TextStyle(
+                            color: DpcColors.textPrimary,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
                           ),
                         ),
                       ),
@@ -649,10 +956,6 @@ class _SetthiAiSheetState extends ConsumerState<SetthiAiSheet> {
     if (type == 'segmented_bar') {
       final title = data['title']?.toString() ?? 'SPEND BREAKDOWN';
       final rawSegments = data['segments'] as List<dynamic>? ?? [];
-      double totalVal = 0;
-      for (final s in rawSegments) {
-        if (s is Map) totalVal += ((s['value'] ?? 0) as num).toDouble();
-      }
 
       return Container(
         margin: const EdgeInsets.only(top: 10),
@@ -665,35 +968,9 @@ class _SetthiAiSheetState extends ConsumerState<SetthiAiSheet> {
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 Text(title.toUpperCase(), style: DpcTypography.badgeTag),
-                const Icon(Icons.bar_chart_rounded,
-                    size: 16, color: DpcColors.accentPrimary),
               ],
             ),
-            const SizedBox(height: 12),
-            ClipRRect(
-              borderRadius: BorderRadius.circular(4),
-              child: SizedBox(
-                height: 8,
-                child: Row(
-                  children: rawSegments.map((s) {
-                    final m = s as Map<String, dynamic>;
-                    final val = ((m['value'] ?? 0) as num).toDouble();
-                    final flex =
-                        totalVal > 0 ? (val / totalVal * 100).round() : 1;
-                    Color segColor = DpcColors.accentPositive;
-                    final hex = m['color']?.toString().replaceAll('#', '');
-                    if (hex != null && hex.length == 6) {
-                      segColor = Color(int.parse('0xFF$hex'));
-                    }
-                    return Expanded(
-                      flex: flex > 0 ? flex : 1,
-                      child: Container(color: segColor),
-                    );
-                  }).toList(),
-                ),
-              ),
-            ),
-            const SizedBox(height: 10),
+            const SizedBox(height: 8),
             Wrap(
               spacing: 12,
               runSpacing: 4,
@@ -710,19 +987,20 @@ class _SetthiAiSheetState extends ConsumerState<SetthiAiSheet> {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Container(
-                      width: 8,
-                      height: 8,
+                      width: 6,
+                      height: 6,
                       decoration: BoxDecoration(
                         color: segColor,
                         shape: BoxShape.circle,
                       ),
                     ),
-                    const SizedBox(width: 4),
+                    const SizedBox(width: 5),
                     Text(
                       '$label: $val',
                       style: const TextStyle(
                         color: DpcColors.textSecondary,
                         fontSize: 11,
+                        fontWeight: FontWeight.w600,
                       ),
                     ),
                   ],
@@ -735,8 +1013,6 @@ class _SetthiAiSheetState extends ConsumerState<SetthiAiSheet> {
     } else if (type == 'radial_gauge') {
       final title = data['title']?.toString() ?? 'FINANCIAL HEALTH';
       final val = ((data['value'] ?? 50) as num).toDouble();
-      final maxVal = ((data['max'] ?? 100) as num).toDouble();
-      final progress = maxVal > 0 ? (val / maxVal).clamp(0.0, 1.0) : 0.5;
       final subtitle = data['subtitle']?.toString() ?? '';
 
       return Container(
@@ -745,34 +1021,36 @@ class _SetthiAiSheetState extends ConsumerState<SetthiAiSheet> {
         decoration: DpcDecorations.cardBase(radius: 16),
         child: Row(
           children: [
-            DpcRadialGauge(
-              progress: progress,
-              size: 64,
-              strokeWidth: 6,
-              activeColor: DpcColors.accentPositive,
-              centerChild: Text(
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: DpcColors.surfaceElevated,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: DpcColors.surfaceBorder, width: 1),
+              ),
+              child: Text(
                 '${val.round()}',
                 style: const TextStyle(
-                  color: DpcColors.textPrimary,
+                  color: DpcColors.accentPositive,
                   fontWeight: FontWeight.w800,
                   fontSize: 16,
                 ),
               ),
             ),
-            const SizedBox(width: 14),
+            const SizedBox(width: 12),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(title.toUpperCase(), style: DpcTypography.badgeTag),
                   if (subtitle.isNotEmpty) ...[
-                    const SizedBox(height: 4),
+                    const SizedBox(height: 3),
                     Text(
                       subtitle,
                       style: const TextStyle(
                         color: DpcColors.textPrimary,
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
                       ),
                     ),
                   ],
@@ -918,7 +1196,7 @@ class _SetthiAiSheetState extends ConsumerState<SetthiAiSheet> {
         ),
         const SizedBox(width: 8),
         const Text(
-          'Checking ledger & crunching numbers...',
+          'Checking your transactions & crunching numbers...',
           style: TextStyle(
             color: DpcColors.textSecondary,
             fontSize: 12,
@@ -1020,24 +1298,14 @@ class _SetthiAiSheetState extends ConsumerState<SetthiAiSheet> {
           GestureDetector(
             onTap: isZeroCredits ? null : () => _handleSend(),
             child: Container(
-              width: 44,
-              height: 44,
+              width: 42,
+              height: 42,
               decoration: BoxDecoration(
-                gradient: isZeroCredits ? null : DpcColors.heroPastel1,
-                color: isZeroCredits ? DpcColors.surfaceTrack : null,
-                shape: BoxShape.circle,
-                boxShadow:
+                color:
                     isZeroCredits
-                        ? null
-                        : [
-                          BoxShadow(
-                            color: const Color(
-                              0xFF86E3CE,
-                            ).withValues(alpha: 0.35),
-                            blurRadius: 10,
-                            offset: const Offset(0, 3),
-                          ),
-                        ],
+                        ? DpcColors.surfaceElevated
+                        : DpcColors.textPrimary,
+                shape: BoxShape.circle,
               ),
               child: Icon(
                 Icons.arrow_upward_rounded,
@@ -1045,7 +1313,7 @@ class _SetthiAiSheetState extends ConsumerState<SetthiAiSheet> {
                 color:
                     isZeroCredits
                         ? DpcColors.textMuted
-                        : DpcColors.textContrast,
+                        : DpcColors.bgOled,
               ),
             ),
           ),

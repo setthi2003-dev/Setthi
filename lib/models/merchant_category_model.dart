@@ -59,11 +59,27 @@ class MerchantCategoryRegistry {
     const MerchantCategoryRule(keyword: 'bluetokai', cleanName: 'Blue Tokai', category: 'Cafe & Dining'),
     const MerchantCategoryRule(keyword: 'third wave', cleanName: 'Third Wave Coffee', category: 'Cafe & Dining'),
     const MerchantCategoryRule(keyword: 'apple', cleanName: 'Apple Services', category: 'Subscriptions & Tech'),
-    const MerchantCategoryRule(keyword: 'google', cleanName: 'Google Play', category: 'Subscriptions & Tech'),
+    const MerchantCategoryRule(keyword: 'google play', cleanName: 'Google Play', category: 'Subscriptions & Tech'),
+    const MerchantCategoryRule(keyword: 'google cloud', cleanName: 'Google Cloud', category: 'Subscriptions & Tech'),
     const MerchantCategoryRule(keyword: 'play store', cleanName: 'Google Play', category: 'Subscriptions & Tech'),
+    const MerchantCategoryRule(keyword: 'google', cleanName: 'Google', category: 'Subscriptions & Tech'),
     const MerchantCategoryRule(keyword: 'salary', cleanName: 'Salary / Stipend', category: 'Income'),
     const MerchantCategoryRule(keyword: 'payroll', cleanName: 'Salary / Stipend', category: 'Income'),
     const MerchantCategoryRule(keyword: 'stipend', cleanName: 'Salary / Stipend', category: 'Income'),
+    const MerchantCategoryRule(keyword: 'meesho', cleanName: 'Meesho', category: 'Shopping'),
+    const MerchantCategoryRule(keyword: 'nestasia', cleanName: 'Nestasia', category: 'Shopping'),
+    const MerchantCategoryRule(keyword: 'nestasi', cleanName: 'Nestasia', category: 'Shopping'),
+    const MerchantCategoryRule(keyword: 'reliance', cleanName: 'Reliance Retail', category: 'Shopping'),
+    const MerchantCategoryRule(keyword: 'brik oven', cleanName: 'Brik Oven', category: 'Food & Dining'),
+    const MerchantCategoryRule(keyword: 'glens bakehouse', cleanName: "Glen's Bakehouse", category: 'Food & Dining'),
+    const MerchantCategoryRule(keyword: 'glens bak', cleanName: "Glen's Bakehouse", category: 'Food & Dining'),
+    const MerchantCategoryRule(keyword: 'cream stone', cleanName: 'Cream Stone', category: 'Food & Dining'),
+    const MerchantCategoryRule(keyword: 'cream sto', cleanName: 'Cream Stone', category: 'Food & Dining'),
+    const MerchantCategoryRule(keyword: 'parijata', cleanName: 'Parijata', category: 'Food & Dining'),
+    const MerchantCategoryRule(keyword: 'parijat ha', cleanName: 'Parijata', category: 'Food & Dining'),
+    const MerchantCategoryRule(keyword: 'phonepe', cleanName: 'PhonePe', category: 'Bills & Utilities'),
+    const MerchantCategoryRule(keyword: 'sms charges', cleanName: 'SMS Charges', category: 'Bank Charges'),
+    const MerchantCategoryRule(keyword: 'sms alert', cleanName: 'SMS Alert', category: 'Bank Charges'),
     const MerchantCategoryRule(keyword: 'splitwise', cleanName: 'Splitwise', category: 'Transfers'),
   ];
 
@@ -87,12 +103,15 @@ class MerchantCategoryRegistry {
     _rules.insert(0, rule);
   }
 
-  /// Attempts to match a narration against known merchant rules.
+  /// Attempts to match a narration against known merchant rules using whole-word boundaries.
   /// Returns [MerchantCategoryRule] if a match is found, or `null` if unmatched.
   MerchantCategoryRule? findMatch(String narration) {
-    final lower = narration.toLowerCase();
     for (final rule in _rules) {
-      if (lower.contains(rule.keyword)) {
+      final pattern = RegExp(
+        r'(?:^|[^a-zA-Z0-9])' + RegExp.escape(rule.keyword) + r'(?:$|[^a-zA-Z0-9])',
+        caseSensitive: false,
+      );
+      if (pattern.hasMatch(narration)) {
         return rule;
       }
     }
