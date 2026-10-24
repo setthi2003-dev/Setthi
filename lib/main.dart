@@ -17,7 +17,7 @@ import 'providers/transaction_providers.dart';
 import 'screens/auth_screen.dart';
 import 'screens/reset_password_screen.dart';
 import 'screens/transaction_feed_screen.dart';
- 
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 

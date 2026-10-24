@@ -105,6 +105,11 @@ class AuthService {
         final idToken = googleAuth.idToken;
         final accessToken = googleAuth.accessToken;
 
+        debugPrint('[AuthService] Google user signed in: ${googleUser.email}');
+        debugPrint(
+          '[AuthService] Google idToken received: ${idToken != null ? 'YES' : 'NO (null)'}',
+        );
+
         if (idToken != null) {
           final response = await _effectiveClient.auth.signInWithIdToken(
             provider: OAuthProvider.google,
@@ -113,10 +118,15 @@ class AuthService {
           );
 
           return response.session != null;
+        } else {
+          debugPrint(
+            '[AuthService] Google Sign-In returned null idToken. '
+            'This occurs when the Android SHA-1 fingerprint is not associated with webClientId ($webClientId).',
+          );
         }
-      } catch (e) {
+      } catch (e, stack) {
         debugPrint(
-          '[AuthService] Native Google Sign-In error, falling back to Web OAuth: $e',
+          '[AuthService] Native Google Sign-In error, falling back to Web OAuth: $e\n$stack',
         );
       }
     }
