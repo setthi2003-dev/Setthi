@@ -51,7 +51,7 @@ class PdfStatementParserService {
   /// Regular expressions for detecting transaction dates in standard Indian banking statements:
   /// Examples: 01/10/2024, 01-10-2024, 01.10.2024, 01 Oct 2024, 01-Oct-2024, 2024-10-01
   static final RegExp _dateRegex = RegExp(
-    r'^(?:#?\s*\d{1,5}\s+)?(\d{1,2}[/\-\.]\d{1,2}[/\-\.]\d{2,4}|\d{1,2}[\s\-](?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*[\s\-]\d{2,4}|\d{4}[/\-\.]\d{1,2}[/\-\.]\d{1,2})(?:\s|$|(?=[()]))',
+    r'^(?:#?\s*\d{1,5}[\.\-\)]?\s+)?(\d{1,2}[/\-\.]\d{1,2}[/\-\.]\d{2,4}|\d{1,2}[/\s\-](?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*[/\s\-]\d{2,4}|\d{4}[/\-\.]\d{1,2}[/\-\.]\d{1,2})(?:\s|$|(?=[()]))',
     caseSensitive: false,
   );
 
@@ -430,9 +430,21 @@ class PdfStatementParserService {
           continue;
         }
 
-        // Detect end-of-table footer lines and account summary termination
-        if (lower.contains('end of statement') ||
-            lower.contains('account summary') ||
+        // Detect explicit end-of-statement termination (only after transactions have been read)
+        if (transactionBlocks.isNotEmpty &&
+            (lower.contains('end of statement') ||
+             lower.contains('*** end of statement') ||
+             lower.contains('--- end of report ---') ||
+             lower.contains('this statement is closed'))) {
+          if (currentBlock.isNotEmpty) {
+            transactionBlocks.add(List.from(currentBlock));
+            currentBlock.clear();
+          }
+          break;
+        }
+
+        // Summary header/footer lines that should be skipped without prematurely terminating statement reading
+        if (lower.contains('account summary') ||
             lower.contains('effective available balance') ||
             lower.contains('effective balance') ||
             lower.contains('computer generated statement') ||
@@ -444,7 +456,7 @@ class PdfStatementParserService {
             transactionBlocks.add(List.from(currentBlock));
             currentBlock.clear();
           }
-          break;
+          continue;
         }
 
         // Filter bank disclaimer / legal boilerplate that sometimes spans
@@ -758,10 +770,10 @@ class PdfStatementParserService {
         rawRows: rawRowMaps,
       );
     } catch (e, stack) {
-      debugPrint('[PDF Statement Parser] Unexpected parsing error: $e\n$stack');
       final errStr = e.toString().toLowerCase();
       final isPassword = errStr.contains('password') || errStr.contains('encrypted');
       if (isPassword) {
+        debugPrint('[PDF Statement Parser] Statement "$fileName" is password-protected.');
         return PdfStatementParseResult(
           success: false,
           isPasswordProtected: true,
@@ -769,6 +781,7 @@ class PdfStatementParserService {
           fileName: fileName,
         );
       }
+      debugPrint('[PDF Statement Parser] Unexpected parsing error: $e\n$stack');
       return PdfStatementParseResult(
         success: false,
         errorMessage: 'Unable to read this statement. Please check the document format and try again.',

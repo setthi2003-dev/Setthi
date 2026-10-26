@@ -303,15 +303,29 @@ class PdfStatementImportNotifier extends Notifier<PdfStatementImportState> {
       debugPrint('[PdfStatementImportNotifier] Error unlocking: $e');
       final errorResult = PdfStatementParseResult(
         success: false,
-        errorMessage: 'Error unlocking statement: $e',
+        isPasswordProtected: true,
+        errorMessage: 'Incorrect password or unreadable document. Please try again.',
       );
       state = state.copyWith(
         isProcessing: false,
-        errorMessage: 'Error unlocking statement: $e',
+        isPasswordProtected: true,
+        errorMessage: 'Incorrect password or unreadable document. Please try again.',
         result: errorResult,
       );
       return errorResult;
     }
+  }
+
+  /// Clears any transient error message
+  void clearError() {
+    if (state.errorMessage != null) {
+      state = state.copyWith(errorMessage: null);
+    }
+  }
+
+  /// Sets a validation or operational error message
+  void setError(String message) {
+    state = state.copyWith(errorMessage: message);
   }
 
   /// Manually synchronizes the currently parsed transactions to Supabase if needed

@@ -60,6 +60,8 @@ class _SetthiOnboardingFlowState extends ConsumerState<SetthiOnboardingFlow> {
   String _selectedIncomeType = 'Salaried';
   bool _isConfirmingPayday = false;
   PdfStatementParseResult? _cachedParseResult;
+  final TextEditingController _pdfPasswordController = TextEditingController();
+  bool _showPdfPassword = false;
 
   @override
   void initState() {
@@ -77,6 +79,7 @@ class _SetthiOnboardingFlowState extends ConsumerState<SetthiOnboardingFlow> {
   @override
   void dispose() {
     _pageController.dispose();
+    _pdfPasswordController.dispose();
     super.dispose();
   }
 
@@ -709,7 +712,9 @@ class _SetthiOnboardingFlowState extends ConsumerState<SetthiOnboardingFlow> {
           const SizedBox(height: 20),
 
           // Interactive PDF Ingestion Box
-          if (importState.isProcessing) ...[
+          if (importState.isPasswordProtected) ...[
+            _buildPasswordProtectedView(importState),
+          ] else if (importState.isProcessing) ...[
             Container(
               width: double.infinity,
               padding: const EdgeInsets.all(28),
@@ -981,6 +986,204 @@ class _SetthiOnboardingFlowState extends ConsumerState<SetthiOnboardingFlow> {
               ),
             ),
           ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPasswordProtectedView(PdfStatementImportState importState) {
+    final isUnlocking = importState.isProcessing;
+    final hasError = importState.errorMessage != null;
+
+    Future<void> submitPassword() async {
+      final pwd = _pdfPasswordController.text.trim();
+      if (pwd.isEmpty) {
+        HapticFeedback.mediumImpact();
+        ref.read(pdfStatementImportProvider.notifier).setError('Please enter the statement password.');
+        return;
+      }
+      final parseRes = await ref
+          .read(pdfStatementImportProvider.notifier)
+          .unlockWithPassword(pwd);
+      if (parseRes != null && parseRes.success && mounted) {
+        HapticFeedback.lightImpact();
+        _pdfPasswordController.clear();
+        setState(() => _cachedParseResult = parseRes);
+        _calibratePaydayFromTransactions(parseRes.transactions);
+        _nextPage();
+      } else {
+        HapticFeedback.mediumImpact();
+      }
+    }
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(22),
+      decoration: BoxDecoration(
+        color: DpcColors.surfaceElevated,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(
+          color: hasError ? DpcColors.accentNegative.withValues(alpha: 0.5) : DpcColors.accentLevel.withValues(alpha: 0.4),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Container(
+            width: 48,
+            height: 48,
+            decoration: BoxDecoration(
+              color: (hasError ? DpcColors.accentNegative : DpcColors.accentLevel).withValues(alpha: 0.15),
+              shape: BoxShape.circle,
+            ),
+            child: Center(
+              child: Icon(
+                hasError ? Icons.lock_clock_rounded : Icons.lock_outline_rounded,
+                color: hasError ? DpcColors.accentNegative : DpcColors.accentLevel,
+                size: 24,
+              ),
+            ),
+          ),
+          const SizedBox(height: 14),
+          const Text(
+            'Password Protected Statement',
+            style: TextStyle(
+              color: DpcColors.textPrimary,
+              fontSize: 16,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'Enter the password to open "${importState.pendingFileName ?? 'this statement'}" (often your PAN in UPPERCASE or Date of Birth in DDMMYYYY format).',
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              color: DpcColors.textSecondary,
+              fontSize: 12,
+              height: 1.4,
+            ),
+          ),
+          const SizedBox(height: 18),
+          TextField(
+            controller: _pdfPasswordController,
+            obscureText: !_showPdfPassword,
+            autofocus: true,
+            enabled: !isUnlocking,
+            style: const TextStyle(
+              color: DpcColors.textPrimary,
+              fontSize: 14,
+            ),
+            onChanged: (_) {
+              if (importState.errorMessage != null) {
+                ref.read(pdfStatementImportProvider.notifier).clearError();
+              }
+            },
+            decoration: InputDecoration(
+              hintText: 'Enter statement password',
+              hintStyle: const TextStyle(color: DpcColors.textMuted),
+              filled: true,
+              fillColor: DpcColors.bgOled,
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(14),
+                borderSide: BorderSide(
+                  color: hasError ? DpcColors.accentNegative : DpcColors.surfaceBorder,
+                  width: hasError ? 1.5 : 1.0,
+                ),
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(14),
+                borderSide: BorderSide(
+                  color: hasError ? DpcColors.accentNegative : DpcColors.surfaceBorder,
+                  width: hasError ? 1.5 : 1.0,
+                ),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(14),
+                borderSide: BorderSide(
+                  color: hasError ? DpcColors.accentNegative : DpcColors.accentPositive,
+                  width: 1.5,
+                ),
+              ),
+              suffixIcon: IconButton(
+                icon: Icon(
+                  _showPdfPassword ? Icons.visibility_off : Icons.visibility,
+                  color: DpcColors.textMuted,
+                  size: 18,
+                ),
+                onPressed: () => setState(() => _showPdfPassword = !_showPdfPassword),
+              ),
+            ),
+            onSubmitted: (_) => submitPassword(),
+          ),
+          if (hasError) ...[
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                const Icon(
+                  Icons.error_outline_rounded,
+                  color: DpcColors.accentNegative,
+                  size: 16,
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    importState.errorMessage!,
+                    style: const TextStyle(
+                      color: DpcColors.accentNegative,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+          const SizedBox(height: 20),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: isUnlocking
+                      ? null
+                      : () {
+                          _pdfPasswordController.clear();
+                          ref.read(pdfStatementImportProvider.notifier).reset();
+                        },
+                  style: OutlinedButton.styleFrom(
+                    side: const BorderSide(color: DpcColors.surfaceBorder),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                  ),
+                  child: const Text('Cancel', style: TextStyle(color: DpcColors.textSecondary)),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: ElevatedButton(
+                  onPressed: isUnlocking ? null : submitPassword,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: DpcColors.accentPositive,
+                    foregroundColor: DpcColors.textContrast,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                  ),
+                  child: isUnlocking
+                      ? const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2.2,
+                            color: DpcColors.textContrast,
+                          ),
+                        )
+                      : const Text(
+                          'Unlock & Continue',
+                          style: TextStyle(fontWeight: FontWeight.w700),
+                        ),
+                ),
+              ),
+            ],
+          ),
         ],
       ),
     );

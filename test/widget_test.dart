@@ -39,6 +39,7 @@ class _FakeChatService extends ChatService {
   Stream<ChatStreamEvent> sendMessage({
     required String prompt,
     required String accessToken,
+    String? sessionId,
   }) async* {
     for (final event in eventsToEmit) {
       yield event;

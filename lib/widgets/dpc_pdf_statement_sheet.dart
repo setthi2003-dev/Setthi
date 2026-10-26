@@ -1,5 +1,6 @@
 import 'dart:math';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../config/dpc_tokens.dart';
 import '../models/transaction_model.dart';
@@ -147,10 +148,10 @@ class _DpcPdfStatementSheetState extends ConsumerState<DpcPdfStatementSheet> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  if (importState.isProcessing) ...[
-                    _buildLoadingCard(importState.statusMessage ?? 'Processing statement...'),
-                  ] else if (importState.isPasswordProtected) ...[
+                  if (importState.isPasswordProtected) ...[
                     _buildPasswordPrompt(importState),
+                  ] else if (importState.isProcessing) ...[
+                    _buildLoadingCard(importState.statusMessage ?? 'Processing statement...'),
                   ] else if (result != null && result.success) ...[
                     _buildSuccessResult(result),
                   ] else ...[
@@ -166,6 +167,26 @@ class _DpcPdfStatementSheetState extends ConsumerState<DpcPdfStatementSheet> {
   }
 
   Widget _buildPasswordPrompt(PdfStatementImportState importState) {
+    final isUnlocking = importState.isProcessing;
+    final hasError = importState.errorMessage != null;
+
+    Future<void> submitPassword() async {
+      final pwd = _passwordController.text.trim();
+      if (pwd.isEmpty) {
+        HapticFeedback.mediumImpact();
+        ref.read(pdfStatementImportProvider.notifier).setError('Please enter the statement password.');
+        return;
+      }
+      final parseRes = await ref
+          .read(pdfStatementImportProvider.notifier)
+          .unlockWithPassword(pwd);
+      if (parseRes != null && parseRes.success) {
+        HapticFeedback.lightImpact();
+      } else {
+        HapticFeedback.mediumImpact();
+      }
+    }
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -175,7 +196,9 @@ class _DpcPdfStatementSheetState extends ConsumerState<DpcPdfStatementSheet> {
           decoration: BoxDecoration(
             color: DpcColors.bgOled,
             borderRadius: BorderRadius.circular(18),
-            border: Border.all(color: DpcColors.surfaceBorder),
+            border: Border.all(
+              color: hasError ? DpcColors.accentNegative.withValues(alpha: 0.5) : DpcColors.surfaceBorder,
+            ),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.center,
@@ -184,13 +207,13 @@ class _DpcPdfStatementSheetState extends ConsumerState<DpcPdfStatementSheet> {
                 width: 48,
                 height: 48,
                 decoration: BoxDecoration(
-                  color: DpcColors.accentLevel.withValues(alpha: 0.12),
+                  color: (hasError ? DpcColors.accentNegative : DpcColors.accentLevel).withValues(alpha: 0.12),
                   shape: BoxShape.circle,
                 ),
-                child: const Center(
+                child: Center(
                   child: Icon(
-                    Icons.lock_outline_rounded,
-                    color: DpcColors.accentLevel,
+                    hasError ? Icons.lock_clock_rounded : Icons.lock_outline_rounded,
+                    color: hasError ? DpcColors.accentNegative : DpcColors.accentLevel,
                     size: 24,
                   ),
                 ),
@@ -206,7 +229,7 @@ class _DpcPdfStatementSheetState extends ConsumerState<DpcPdfStatementSheet> {
               ),
               const SizedBox(height: 6),
               Text(
-                'Enter the password to open "${importState.pendingFileName ?? 'this statement'}" (often your PAN or Date of Birth in DDMMYYYY format).',
+                'Enter the password to open "${importState.pendingFileName ?? 'this statement'}" (often your PAN in UPPERCASE or Date of Birth in DDMMYYYY format).',
                 textAlign: TextAlign.center,
                 style: const TextStyle(
                   color: DpcColors.textSecondary,
@@ -218,10 +241,16 @@ class _DpcPdfStatementSheetState extends ConsumerState<DpcPdfStatementSheet> {
                 controller: _passwordController,
                 obscureText: !_showPassword,
                 autofocus: true,
+                enabled: !isUnlocking,
                 style: const TextStyle(
                   color: DpcColors.textPrimary,
                   fontSize: 14,
                 ),
+                onChanged: (_) {
+                  if (importState.errorMessage != null) {
+                    ref.read(pdfStatementImportProvider.notifier).clearError();
+                  }
+                },
                 decoration: InputDecoration(
                   hintText: 'Enter statement password',
                   hintStyle: const TextStyle(color: DpcColors.textMuted),
@@ -229,11 +258,24 @@ class _DpcPdfStatementSheetState extends ConsumerState<DpcPdfStatementSheet> {
                   fillColor: DpcColors.surfaceDark,
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: const BorderSide(color: DpcColors.surfaceBorder),
+                    borderSide: BorderSide(
+                      color: hasError ? DpcColors.accentNegative : DpcColors.surfaceBorder,
+                      width: hasError ? 1.5 : 1.0,
+                    ),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(
+                      color: hasError ? DpcColors.accentNegative : DpcColors.surfaceBorder,
+                      width: hasError ? 1.5 : 1.0,
+                    ),
                   ),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: const BorderSide(color: DpcColors.accentPositive),
+                    borderSide: BorderSide(
+                      color: hasError ? DpcColors.accentNegative : DpcColors.accentPositive,
+                      width: 1.5,
+                    ),
                   ),
                   suffixIcon: IconButton(
                     icon: Icon(
@@ -244,21 +286,29 @@ class _DpcPdfStatementSheetState extends ConsumerState<DpcPdfStatementSheet> {
                     onPressed: () => setState(() => _showPassword = !_showPassword),
                   ),
                 ),
-                onSubmitted: (pwd) {
-                  if (pwd.trim().isNotEmpty) {
-                    ref.read(pdfStatementImportProvider.notifier).unlockWithPassword(pwd.trim());
-                  }
-                },
+                onSubmitted: (_) => submitPassword(),
               ),
-              if (importState.errorMessage != null) ...[
+              if (hasError) ...[
                 const SizedBox(height: 10),
-                Text(
-                  importState.errorMessage!,
-                  style: const TextStyle(
-                    color: DpcColors.accentNegative,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                  ),
+                Row(
+                  children: [
+                    const Icon(
+                      Icons.error_outline_rounded,
+                      color: DpcColors.accentNegative,
+                      size: 16,
+                    ),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        importState.errorMessage!,
+                        style: const TextStyle(
+                          color: DpcColors.accentNegative,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ],
             ],
@@ -269,10 +319,12 @@ class _DpcPdfStatementSheetState extends ConsumerState<DpcPdfStatementSheet> {
           children: [
             Expanded(
               child: OutlinedButton(
-                onPressed: () {
-                  _passwordController.clear();
-                  ref.read(pdfStatementImportProvider.notifier).reset();
-                },
+                onPressed: isUnlocking
+                    ? null
+                    : () {
+                        _passwordController.clear();
+                        ref.read(pdfStatementImportProvider.notifier).reset();
+                      },
                 style: OutlinedButton.styleFrom(
                   side: const BorderSide(color: DpcColors.surfaceBorder),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
@@ -284,19 +336,23 @@ class _DpcPdfStatementSheetState extends ConsumerState<DpcPdfStatementSheet> {
             const SizedBox(width: 12),
             Expanded(
               child: ElevatedButton(
-                onPressed: () {
-                  final pwd = _passwordController.text.trim();
-                  if (pwd.isNotEmpty) {
-                    ref.read(pdfStatementImportProvider.notifier).unlockWithPassword(pwd);
-                  }
-                },
+                onPressed: isUnlocking ? null : submitPassword,
                 style: ElevatedButton.styleFrom(
                   backgroundColor: DpcColors.accentPositive,
                   foregroundColor: DpcColors.textContrast,
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                   padding: const EdgeInsets.symmetric(vertical: 14),
                 ),
-                child: const Text('Unlock', style: TextStyle(fontWeight: FontWeight.w700)),
+                child: isUnlocking
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2.2,
+                          color: DpcColors.textContrast,
+                        ),
+                      )
+                    : const Text('Unlock', style: TextStyle(fontWeight: FontWeight.w700)),
               ),
             ),
           ],
