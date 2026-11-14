@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../config/dpc_tokens.dart';
 import '../models/transaction_model.dart';
 import '../providers/pdf_statement_provider.dart';
+import '../providers/transaction_providers.dart';
 import '../services/pdf_statement_parser_service.dart';
 
 /// Interactive modal sheet to pick a bank statement PDF, extract tabular transactions,
@@ -787,6 +788,7 @@ class _DpcPdfStatementSheetState extends ConsumerState<DpcPdfStatementSheet> {
               child: ElevatedButton(
                 onPressed: () {
                   ref.read(pdfStatementImportProvider.notifier).reset();
+                  ref.read(bottomNavIndexProvider.notifier).setIndex(0);
                   Navigator.of(context).pop();
                 },
                 style: ElevatedButton.styleFrom(
@@ -799,7 +801,7 @@ class _DpcPdfStatementSheetState extends ConsumerState<DpcPdfStatementSheet> {
                   padding: const EdgeInsets.symmetric(vertical: 12),
                 ),
                 child: const Text(
-                  'View Transactions',
+                  'Continue to Setthi AI',
                   style: TextStyle(
                     fontWeight: FontWeight.w800,
                   ),

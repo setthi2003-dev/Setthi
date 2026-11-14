@@ -12,7 +12,7 @@ void main() {
   group('Cleo-style Onboarding & Account Linking Tests', () {
     testWidgets('Empty state displays Meet Setthi card and launches SetthiOnboardingFlow', (tester) async {
       tester.view.physicalSize = const Size(1080, 2400);
-      tester.view.devicePixelRatio = 3.0;
+      tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetDevicePixelRatio);
 
@@ -30,17 +30,17 @@ void main() {
       await tester.tap(find.byIcon(Icons.insights_rounded));
       await tester.pumpAndSettle();
 
-      // Verify Cleo Hook & Persona card in empty state
-      expect(find.text('MEET SETTHI'), findsOneWidget);
-      expect(find.text('Your AI money coach that won\'t bore you to tears.'), findsOneWidget);
-      expect(find.text('Get Started'), findsOneWidget);
+      // Verify Connect Your Bank card in empty state
+      expect(find.text('CONNECT YOUR BANK'), findsOneWidget);
+      expect(find.text('Connect your bank to unlock Setthi.'), findsOneWidget);
+      expect(find.text('Connect Your Bank'), findsOneWidget);
 
-      // Scroll down to make Get Started card fully visible
+      // Scroll down to make button fully visible
       await tester.drag(find.byType(CustomScrollView), const Offset(0, -350));
       await tester.pumpAndSettle();
 
-      // Tap Get Started to launch SetthiOnboardingFlow modal
-      await tester.tap(find.text('Get Started'));
+      // Tap to launch SetthiOnboardingFlow modal
+      await tester.tap(find.text('Connect Your Bank'));
       await tester.pumpAndSettle();
 
       // Step 1: Meet Setthi is presented
@@ -59,7 +59,13 @@ void main() {
       await tester.pumpAndSettle();
 
       // Step 2: Connect Your Bank
-      expect(find.text('Connect Your Bank'), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byType(SetthiOnboardingFlow),
+          matching: find.text('Connect Your Bank'),
+        ),
+        findsOneWidget,
+      );
       expect(find.text('Select Bank Statement PDF'), findsOneWidget);
       expect(find.text('Choose PDF Statement'), findsOneWidget);
     });

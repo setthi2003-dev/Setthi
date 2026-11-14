@@ -22,6 +22,8 @@ import '../widgets/profile_completion_dialog.dart';
 import '../widgets/dpc_safe_to_spend_card.dart';
 import '../widgets/setthi_onboarding_flow.dart';
 import '../widgets/dpc_pdf_statement_sheet.dart';
+import 'gmail_sync_screen.dart';
+import '../providers/gmail_sync_provider.dart';
 import '../providers/pdf_statement_provider.dart';
 import 'setu_consent_webview.dart';
 
@@ -41,9 +43,16 @@ class TransactionFeedScreen extends ConsumerStatefulWidget {
 
 class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
   final ScrollController _scrollController = ScrollController();
-  // 0: AI Page (Primary), 1: Spending Insights & Transactions (Merged), 4: Profile
+  // 0: AI Page (Primary), 1: Spending Insights & Transactions (Merged), 3: Gmail Sync, 4: Profile
   int _activeNavIndex = 0;
   bool _hasPromptedProfileCompletion = false;
+
+  void _setNavIndex(int index) {
+    ref.read(bottomNavIndexProvider.notifier).setIndex(index);
+    if (mounted) {
+      setState(() => _activeNavIndex = index);
+    }
+  }
 
   @override
   void initState() {
@@ -110,13 +119,20 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
               ref.read(transactionFeedProvider).value?.isNotEmpty ?? false;
           final hasConsent = ref.read(hasActiveConsentProvider);
           if (!hasTransactions && !hasConsent) {
-            SetthiOnboardingFlow.show(
+            await SetthiOnboardingFlow.show(
               context,
-              initialPage: 1,
+              initialPage: 0,
               onComplete: () {
-                setState(() => _activeNavIndex = 0);
+                _hasPromptedProfileCompletion = true;
+                _setNavIndex(0);
               },
             );
+            if (mounted) {
+              _setNavIndex(0);
+            }
+          } else {
+            _hasPromptedProfileCompletion = true;
+            _setNavIndex(0);
           }
         }
       });
@@ -132,7 +148,7 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
 
   void _onScroll() {
     if (!_scrollController.hasClients) return;
-    if (_activeNavIndex == 0 || _activeNavIndex == 4) return;
+    if (_activeNavIndex == 0 || _activeNavIndex == 3 || _activeNavIndex == 4) return;
     _checkAutoFetch(_scrollController.position);
   }
 
@@ -162,6 +178,8 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
     final transactionFeedAsync = ref.watch(transactionFeedProvider);
     final hasActiveConsent = ref.watch(hasActiveConsentProvider);
     final isSyncing = transactionFeedAsync.isLoading;
+    final navIndex = ref.watch(bottomNavIndexProvider);
+    _activeNavIndex = navIndex;
 
     final hasKeyboard = MediaQuery.viewInsetsOf(context).bottom > 0;
 
@@ -172,6 +190,7 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
       body: RefreshIndicator(
         notificationPredicate: (notification) =>
             _activeNavIndex != 0 &&
+            _activeNavIndex != 3 &&
             defaultScrollNotificationPredicate(notification),
         onRefresh: () => _handleSyncAction(context, ref),
         color: DpcColors.accentPositive,
@@ -202,10 +221,16 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
           },
           error: (err, stack) {
             if (_activeNavIndex == 0) {
-              return const SetthiAiSheet(isFullScreenPage: true);
+              return SetthiAiSheet(
+                isFullScreenPage: true,
+                onNavigateToGmail: () => _setNavIndex(3),
+              );
             }
             if (_activeNavIndex == 1) {
               return _buildTelemetryScreen(context, ref, const []);
+            }
+            if (_activeNavIndex == 3) {
+              return const GmailSyncScreen();
             }
             if (_activeNavIndex == 4) {
               return _buildProfileScreen(context, ref);
@@ -228,9 +253,7 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
           ? null
           : DpcFloatingNavDock(
               activeIndex: _activeNavIndex,
-              onAiTap: () {
-                setState(() => _activeNavIndex = 0);
-              },
+              onAiTap: () => _setNavIndex(0),
               onTelemetryTap: () {
                 if (ref.read(transactionFeedProvider).hasError) {
                   ref
@@ -238,7 +261,7 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
                       .dismissErrorAndGoHome();
                 }
                 if (_activeNavIndex != 1 && _activeNavIndex != 2) {
-                  setState(() => _activeNavIndex = 1);
+                  _setNavIndex(1);
                 } else if (_scrollController.hasClients) {
                   _scrollController.animateTo(
                     0,
@@ -254,7 +277,7 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
                       .dismissErrorAndGoHome();
                 }
                 if (_activeNavIndex != 1 && _activeNavIndex != 2) {
-                  setState(() => _activeNavIndex = 1);
+                  _setNavIndex(1);
                 } else if (_scrollController.hasClients) {
                   _scrollController.animateTo(
                     0,
@@ -263,14 +286,12 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
                   );
                 }
               },
-              // [COMMENTED OUT FROM UI - DO NOT REMOVE]
-              // onBankTap: () => _showLinkBankBottomSheet(context, ref),
-              onProfileTap: () {
-                setState(() => _activeNavIndex = 4);
-              },
+              onGmailTap: () => _setNavIndex(3),
+              onProfileTap: () => _setNavIndex(4),
               onSyncTap: () => _handleSyncAction(context, ref),
               isSyncing: isSyncing,
               hasActiveConsent: hasActiveConsent,
+              isGmailConnected: ref.watch(gmailSyncProvider).isConnected,
             ),
     );
   }
@@ -387,15 +408,8 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
         elevation: 0,
         backgroundColor: DpcColors.bgOled,
         surfaceTintColor: Colors.transparent,
-        titleSpacing: 18,
-        leading: IconButton(
-          icon: const Icon(
-            Icons.arrow_back_rounded,
-            color: DpcColors.textPrimary,
-          ),
-          tooltip: 'Back to AI Chat',
-          onPressed: () => setState(() => _activeNavIndex = 0),
-        ),
+        automaticallyImplyLeading: false,
+        titleSpacing: 20,
         title: const Text(
           'Spending Insights',
           style: TextStyle(
@@ -422,6 +436,25 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
           ),
           const SizedBox(width: 6),
         ],
+      );
+    }
+
+    if (_activeNavIndex == 3) {
+      // Gmail Sync Screen AppBar
+      return AppBar(
+        elevation: 0,
+        backgroundColor: DpcColors.bgOled,
+        surfaceTintColor: Colors.transparent,
+        titleSpacing: 18,
+        title: const Text(
+          'Gmail Sync',
+          style: TextStyle(
+            color: DpcColors.textPrimary,
+            fontSize: 20,
+            fontWeight: FontWeight.w800,
+            letterSpacing: -0.6,
+          ),
+        ),
       );
     }
 
@@ -522,7 +555,14 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
   ) {
     if (_activeNavIndex == 0) {
       // Primary: Dedicated Setthi AI Full Page
-      return const SetthiAiSheet(isFullScreenPage: true);
+      return SetthiAiSheet(
+        isFullScreenPage: true,
+        onNavigateToGmail: () => _setNavIndex(3),
+      );
+    }
+    if (_activeNavIndex == 3) {
+      // Dedicated Gmail Sync Full Page
+      return const GmailSyncScreen();
     }
     if (_activeNavIndex == 4) {
       // Dedicated Profile Screen
@@ -1201,16 +1241,16 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
         borderRadius: BorderRadius.circular(16),
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 180),
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
           decoration: BoxDecoration(
             color: isSelected
-                ? DpcColors.surfaceElevated
-                : DpcColors.surfaceDark,
+                ? Colors.white
+                : const Color(0x14FFFFFF),
             borderRadius: BorderRadius.circular(16),
             border: Border.all(
               color: isSelected
-                  ? DpcColors.textPrimary.withValues(alpha: 0.35)
-                  : DpcColors.surfaceBorder,
+                  ? Colors.white
+                  : const Color(0x1AFFFFFF),
               width: 1,
             ),
           ),
@@ -1218,10 +1258,10 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
             label,
             style: TextStyle(
               color: isSelected
-                  ? DpcColors.textPrimary
+                  ? Colors.black
                   : DpcColors.textSecondary,
               fontSize: 11,
-              fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
+              fontWeight: isSelected ? FontWeight.w800 : FontWeight.w500,
             ),
           ),
         ),
@@ -1501,207 +1541,202 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            const Expanded(
-              child: Text(
-                'BALANCE',
-                style: TextStyle(
-                  color: DpcColors.textSecondary,
-                  fontSize: 11,
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: 1.2,
-                ),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
-            const SizedBox(width: 8),
-            // Import PDF button in the right corner
-            InkWell(
-              onTap: () => DpcPdfStatementSheet.show(context),
-              borderRadius: BorderRadius.circular(8),
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                decoration: BoxDecoration(
-                  color: DpcColors.surfaceElevated,
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: DpcColors.surfaceBorder, width: 1),
-                ),
-                child: const Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      Icons.picture_as_pdf_outlined,
-                      size: 13,
-                      color: DpcColors.accentPositive,
-                    ),
-                    SizedBox(width: 4),
-                    Text(
-                      'Import PDF',
-                      style: TextStyle(
-                        color: DpcColors.accentPositive,
-                        fontSize: 11,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 6),
-        balanceAsync.when(
-          loading: () => const Padding(
-            padding: EdgeInsets.symmetric(vertical: 8),
-            child: SizedBox(
-              height: 24,
-              width: 24,
-              child: CircularProgressIndicator(
-                strokeWidth: 2,
-                color: DpcColors.accentPositive,
-              ),
-            ),
-          ),
-          error: (err, stack) => Row(
-            children: [
-              const Text(
-                'Could not load balance',
-                style: TextStyle(
-                  color: DpcColors.accentNegative,
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              const SizedBox(width: 8),
-              GestureDetector(
-                onTap: () => ref.invalidate(balanceProvider),
-                child: const Text(
-                  'Retry',
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                const Text(
+                  'AVAILABLE BALANCE',
                   style: TextStyle(
-                    color: DpcColors.accentPrimary,
-                    fontSize: 14,
+                    color: DpcColors.textSecondary,
+                    fontSize: 11,
                     fontWeight: FontWeight.w700,
-                    decoration: TextDecoration.underline,
+                    letterSpacing: 1.2,
+                  ),
+                ),
+                // Import PDF button in the right corner
+                InkWell(
+                  onTap: () => DpcPdfStatementSheet.show(context),
+                  borderRadius: BorderRadius.circular(14),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                    decoration: BoxDecoration(
+                      color: const Color(0x14FFFFFF),
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(color: const Color(0x1AFFFFFF), width: 1),
+                    ),
+                    child: const Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          Icons.picture_as_pdf_outlined,
+                          size: 13,
+                          color: DpcColors.accentPositive,
+                        ),
+                        SizedBox(width: 5),
+                        Text(
+                          'Import PDF',
+                          style: TextStyle(
+                            color: DpcColors.accentPositive,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            balanceAsync.when(
+              loading: () => const Padding(
+                padding: EdgeInsets.symmetric(vertical: 8),
+                child: SizedBox(
+                  height: 24,
+                  width: 24,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: DpcColors.accentPositive,
                   ),
                 ),
               ),
-            ],
-          ),
-          data: (balData) {
-            final bool available = balData != null && balData['available'] == true;
-            if (!available) {
-              final bool hasTransactions =
-                  ref.watch(transactionFeedProvider).asData?.value.isNotEmpty == true;
-              return Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+              error: (err, stack) => Row(
                 children: [
-                  Text(
-                    hasTransactions
-                        ? 'Balance not available from this statement'
-                        : 'No statement imported yet',
-                    style: const TextStyle(
-                      color: DpcColors.textPrimary,
-                      fontSize: 18,
-                      fontWeight: FontWeight.w700,
-                      letterSpacing: -0.3,
+                  const Text(
+                    'Could not load balance',
+                    style: TextStyle(
+                      color: DpcColors.accentNegative,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
                     ),
                   ),
-                  const SizedBox(height: 4),
-                  Text(
-                    hasTransactions
-                        ? 'We could not verify the balance in this PDF.'
-                        : 'Import a PDF statement to see your verified balance.',
-                    style: const TextStyle(
-                      color: DpcColors.textSecondary,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w500,
+                  const SizedBox(width: 8),
+                  GestureDetector(
+                    onTap: () => ref.invalidate(balanceProvider),
+                    child: const Text(
+                      'Retry',
+                      style: TextStyle(
+                        color: DpcColors.accentPrimary,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w700,
+                        decoration: TextDecoration.underline,
+                      ),
                     ),
                   ),
                 ],
-              );
-            }
-
-            final double currentBal =
-                ((balData['current_balance'] ?? 0.0) as num).toDouble();
-            final String? asOfDate = balData['as_of_date']?.toString();
-            final int? daysAgo = balData['days_since_statement_end'] is num
-                ? (balData['days_since_statement_end'] as num).toInt()
-                : null;
-            final bool isStale = balData['stale'] == true;
-            final formattedDate = _formatDate(asOfDate);
-
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.baseline,
-                  textBaseline: TextBaseline.alphabetic,
-                  children: [
-                    Text(
-                      BankTransaction.formatRupees(currentBal),
-                      style: DpcTypography.displayMetric,
-                    ),
-                    const SizedBox(width: 8),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: DpcColors.surfaceDark,
-                        borderRadius: BorderRadius.circular(6),
-                        border: Border.all(color: DpcColors.surfaceBorder, width: 1),
-                      ),
-                      child: const Text(
-                        'INR',
-                        style: TextStyle(
-                          color: DpcColors.accentPrimary,
-                          fontSize: 10,
-                          fontWeight: FontWeight.w800,
-                          letterSpacing: 0.5,
+              ),
+              data: (balData) {
+                final bool available = balData != null && balData['available'] == true;
+                if (!available) {
+                  final bool hasTransactions =
+                      ref.watch(transactionFeedProvider).asData?.value.isNotEmpty == true;
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        hasTransactions
+                            ? 'Balance not available from this statement'
+                            : 'No statement imported yet',
+                        style: const TextStyle(
+                          color: DpcColors.textPrimary,
+                          fontSize: 18,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: -0.3,
                         ),
                       ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 4),
-                Row(
-                  children: [
-                    Text(
-                      'as of $formattedDate${daysAgo != null ? ' · $daysAgo days ago' : ''}',
-                      style: const TextStyle(
-                        color: DpcColors.textSecondary,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                    if (isStale) ...[
-                      const SizedBox(width: 6),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1.5),
-                        decoration: BoxDecoration(
-                          color: DpcColors.accentLevel.withValues(alpha: 0.12),
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                        child: const Text(
-                          'may have changed since',
-                          style: TextStyle(
-                            color: DpcColors.accentLevel,
-                            fontSize: 10,
-                            fontWeight: FontWeight.w600,
-                          ),
+                      const SizedBox(height: 4),
+                      Text(
+                        hasTransactions
+                            ? 'We could not verify the balance in this PDF.'
+                            : 'Import a PDF statement to see your verified balance.',
+                        style: const TextStyle(
+                          color: DpcColors.textSecondary,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w500,
                         ),
                       ),
                     ],
+                  );
+                }
+
+                final double currentBal =
+                    ((balData['current_balance'] ?? 0.0) as num).toDouble();
+                final String? asOfDate = balData['as_of_date']?.toString();
+                final int? daysAgo = balData['days_since_statement_end'] is num
+                    ? (balData['days_since_statement_end'] as num).toInt()
+                    : null;
+                final bool isStale = balData['stale'] == true;
+                final formattedDate = _formatDate(asOfDate);
+
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.baseline,
+                      textBaseline: TextBaseline.alphabetic,
+                      children: [
+                        Text(
+                          BankTransaction.formatRupees(currentBal),
+                          style: DpcTypography.displayMetric,
+                        ),
+                        const SizedBox(width: 8),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: const Color(0x1AFFFFFF),
+                            borderRadius: BorderRadius.circular(6),
+                            border: Border.all(color: const Color(0x26FFFFFF), width: 1),
+                          ),
+                          child: const Text(
+                            'INR',
+                            style: TextStyle(
+                              color: DpcColors.accentPositive,
+                              fontSize: 10,
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: 0.5,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    Row(
+                      children: [
+                        Text(
+                          'as of $formattedDate${daysAgo != null ? ' · $daysAgo days ago' : ''}',
+                          style: const TextStyle(
+                            color: DpcColors.textSecondary,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                        if (isStale) ...[
+                          const SizedBox(width: 6),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1.5),
+                            decoration: BoxDecoration(
+                              color: DpcColors.accentLevel.withValues(alpha: 0.12),
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: const Text(
+                              'may have changed since',
+                              style: TextStyle(
+                                color: DpcColors.accentLevel,
+                                fontSize: 10,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
                   ],
-                ),
-              ],
-            );
-          },
-        ),
-      ],
-    );
+                );
+              },
+            ),
+          ],
+        );
   }
 
   /// 5. Individual Transaction Row in Minimalist DPC Style
@@ -1713,29 +1748,21 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
 
     return InkWell(
       onTap: () => _showTransactionDetailsModal(context, txn),
-      borderRadius: BorderRadius.circular(8),
-      splashColor: DpcColors.surfaceTrack.withValues(alpha: 0.3),
+      borderRadius: BorderRadius.circular(12),
+      splashColor: const Color(0x1AFFFFFF),
       child: Padding(
-        padding: EdgeInsets.zero,
+        padding: const EdgeInsets.symmetric(vertical: 6),
         child: Row(
           children: [
-            // Category Icon with subtle tinted squircle
+            // Category Icon with subtle obsidian glass squircle
             Container(
-              width: 38,
-              height: 38,
+              width: 40,
+              height: 40,
               decoration: BoxDecoration(
-                color:
-                    (isDebit
-                            ? DpcColors.surfaceTrack
-                            : DpcColors.accentPositive)
-                        .withValues(alpha: isDebit ? 0.6 : 0.12),
-                borderRadius: BorderRadius.circular(11),
+                color: const Color(0xCC141418),
+                borderRadius: BorderRadius.circular(12),
                 border: Border.all(
-                  color:
-                      (isDebit
-                              ? DpcColors.surfaceBorder
-                              : DpcColors.accentPositive)
-                          .withValues(alpha: 0.25),
+                  color: const Color(0x1AFFFFFF),
                   width: 1,
                 ),
               ),
@@ -1747,7 +1774,7 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
                 size: 18,
               ),
             ),
-            const SizedBox(width: 12),
+            const SizedBox(width: 14),
             // Clean Merchant name & Time / Mode
             Expanded(
               child: Column(
@@ -3116,10 +3143,11 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
                   onPressed: () {
                     SetthiOnboardingFlow.show(
                       context,
-                      initialPage: 1,
+                      initialPage: 0,
                       onComplete: () {
                         // Immediately navigate into Setthi AI Chat with icebreaker ready
-                        setState(() => _activeNavIndex = 0);
+                        _hasPromptedProfileCompletion = true;
+                        _setNavIndex(0);
                       },
                     );
                   },
@@ -3157,7 +3185,8 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
                     context,
                     initialPage: 1,
                     onComplete: () {
-                      setState(() => _activeNavIndex = 0);
+                      _hasPromptedProfileCompletion = true;
+                      _setNavIndex(0);
                     },
                   );
                 },
@@ -3238,7 +3267,8 @@ class _TransactionFeedScreenState extends ConsumerState<TransactionFeedScreen> {
                 context,
                 initialPage: 1,
                 onComplete: () {
-                  setState(() => _activeNavIndex = 0);
+                  _hasPromptedProfileCompletion = true;
+                  _setNavIndex(0);
                 },
               );
             },

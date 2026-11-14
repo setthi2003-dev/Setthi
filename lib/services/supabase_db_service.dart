@@ -4,8 +4,11 @@ import 'package:uuid/uuid.dart';
 import '../config/supabase_config.dart';
 import '../models/chat_message_model.dart';
 import '../models/merchant_category_model.dart';
+import '../models/reminder_model.dart';
 import '../models/transaction_model.dart';
+import 'email_transaction_parser.dart';
 import 'setu_aa_service.dart';
+import 'slice_credit_card_pdf_parser_service.dart';
 
 /// Service managing persistent storage of user profiles, AA consents,
 /// bank accounts, and financial transactions in Supabase Postgres.
@@ -430,11 +433,12 @@ class SupabaseDbService {
     }
   }
 
-  /// Fetches stored bank transactions for the current user from public.bank_transactions with pagination.
+  /// Fetches stored bank and credit card transactions for the current user with pagination.
   Future<List<BankTransaction>> fetchStoredTransactions({
     String? userId,
     int? limit,
     int? offset,
+    bool includeCreditCard = true,
   }) async {
     final client = _effectiveClient;
     final uid = userId ?? currentUserId;
@@ -445,6 +449,7 @@ class SupabaseDbService {
           .from('bank_transactions')
           .select()
           .eq('user_id', uid)
+          .not('txn_id', 'like', 'gmail_%')
           .order('transaction_timestamp', ascending: false)
           .order('seq', ascending: false, nullsFirst: false)
           .order('created_at', ascending: false);
@@ -457,14 +462,59 @@ class SupabaseDbService {
 
       final res = await query;
       final list = List<Map<String, dynamic>>.from(res);
-      return list.map((row) => BankTransaction.fromJson(row)).toList();
+      final bankTxns = list.map((row) => BankTransaction.fromJson(row)).toList();
+
+      if (includeCreditCard) {
+        try {
+          final cardRes = await client
+              .from('credit_card_transactions')
+              .select()
+              .eq('user_id', uid)
+              .order('transaction_date', ascending: false)
+              .range(offset ?? 0, (offset ?? 0) + (limit ?? 50) - 1);
+          final cardList = List<Map<String, dynamic>>.from(cardRes);
+          final cardTxns = cardList.map((row) => BankTransaction.fromCreditCardJson(row)).toList();
+
+          if (cardTxns.isNotEmpty) {
+            final combined = [...bankTxns, ...cardTxns];
+            combined.sort((a, b) => b.transactionTimestamp.compareTo(a.transactionTimestamp));
+            if (limit != null && combined.length > limit) {
+              return combined.sublist(0, limit);
+            }
+            return combined;
+          }
+        } catch (e) {
+          debugPrint('[Supabase DB] Note on card txns in fetchStoredTransactions: $e');
+        }
+      }
+
+      return bankTxns;
     } catch (e) {
       debugPrint('[Supabase DB] Error loading stored transactions: $e');
       return [];
     }
   }
 
-  /// Returns the total count of stored transactions for the current user
+  /// Cleans up any legacy/test email transactions that were incorrectly inserted into public.bank_transactions.
+  /// Bank transactions are reserved exclusively for bank statements and Account Aggregator feeds.
+  Future<void> cleanupOrphanedBankTransactions([String? userId]) async {
+    final client = _effectiveClient;
+    final uid = userId ?? currentUserId;
+    if (client == null || uid == null) return;
+
+    try {
+      await client
+          .from('bank_transactions')
+          .delete()
+          .eq('user_id', uid)
+          .like('txn_id', 'gmail_%');
+      debugPrint('[Supabase DB] Cleaned up orphaned gmail_ records from bank_transactions');
+    } catch (e) {
+      debugPrint('[Supabase DB] Note on cleanupOrphanedBankTransactions: $e');
+    }
+  }
+
+  /// Returns the total count of stored transactions (bank + card) for the current user
   Future<int> countStoredTransactions([String? userId]) async {
     final client = _effectiveClient;
     final uid = userId ?? currentUserId;
@@ -474,8 +524,15 @@ class SupabaseDbService {
       final res = await client
           .from('bank_transactions')
           .select('txn_id')
-          .eq('user_id', uid);
-      return (res as List).length;
+          .eq('user_id', uid)
+          .not('txn_id', 'like', 'gmail_%');
+      final bankCount = (res as List).length;
+      try {
+        final cardCount = await countCreditCardTransactions(uid);
+        return bankCount + cardCount;
+      } catch (_) {
+        return bankCount;
+      }
     } catch (e) {
       debugPrint('[Supabase DB] Error counting transactions: $e');
       return 0;
@@ -969,4 +1026,703 @@ class SupabaseDbService {
       return null;
     }
   }
+
+  // ===========================================================================
+  // 9. EMAIL EXTRACTED TRANSACTIONS (PRODUCTION ISOLATED TABLE)
+  // ===========================================================================
+
+  /// Saves email-extracted transactions and discovered subscriptions directly to
+  /// public.email_extracted_transactions in production, guaranteeing idempotent
+  /// upserts keyed on (user_id, gmail_message_id).
+  ///
+  /// Subscriptions are strictly consolidated per service (e.g., 'sub_netflix')
+  /// so that recurring services are stored ONCE with comprehensive details (latest amount,
+  /// next due day, last paid date, card info) rather than duplicating per monthly email.
+  Future<bool> saveEmailExtractedTransactions({
+    required List<ExtractedEmailTransaction> transactions,
+    required String userId,
+    List<ExtractedEmailSubscription> subscriptions = const [],
+  }) async {
+    final client = _effectiveClient;
+    if (client == null) return false;
+    if (transactions.isEmpty && subscriptions.isEmpty) return true;
+
+    try {
+      final nowUtc = DateTime.now().toUtc().toIso8601String();
+
+      // 1. Group and consolidate all subscription signals by service name
+      final Map<String, _ConsolidatedSubscription> consolidatedSubs = {};
+
+      for (final s in subscriptions) {
+        final key = s.serviceName.trim().toLowerCase();
+        final existing = consolidatedSubs[key];
+        if (existing == null) {
+          consolidatedSubs[key] = _ConsolidatedSubscription(
+            serviceName: s.serviceName.trim(),
+            expectedAmount: s.expectedAmount,
+            currency: s.currency,
+            typicalDueDay: s.typicalDueDay,
+            frequency: s.frequency,
+            latestBillingDate: s.billingDate,
+            cardLast4: s.cardLast4,
+            category: s.category,
+          );
+        } else {
+          if (s.billingDate.isAfter(existing.latestBillingDate)) {
+            existing.latestBillingDate = s.billingDate;
+            existing.expectedAmount = s.expectedAmount;
+          }
+          if (existing.cardLast4 == null && s.cardLast4 != null) {
+            existing.cardLast4 = s.cardLast4;
+          }
+          if (s.typicalDueDay > 0) {
+            existing.typicalDueDay = s.typicalDueDay;
+          }
+        }
+      }
+
+      for (final t in transactions) {
+        final isSubCategory = t.category == 'Subscription';
+        final isRecurring = t.isRecurring;
+        if (isSubCategory || isRecurring) {
+          final key = t.merchantName.trim().toLowerCase();
+          final existing = consolidatedSubs[key];
+          if (existing == null) {
+            consolidatedSubs[key] = _ConsolidatedSubscription(
+              serviceName: t.merchantName.trim(),
+              expectedAmount: t.amount,
+              currency: t.currency,
+              typicalDueDay: t.transactionDate.day,
+              frequency: 'MONTHLY',
+              latestBillingDate: t.transactionDate,
+              cardLast4: t.cardLast4,
+              bankOrIssuer: t.bankOrIssuer,
+              category: t.category ?? 'Subscription',
+            );
+          } else {
+            if (t.transactionDate.isAfter(existing.latestBillingDate)) {
+              existing.latestBillingDate = t.transactionDate;
+              existing.expectedAmount = t.amount;
+            }
+            if (existing.cardLast4 == null && t.cardLast4 != null) {
+              existing.cardLast4 = t.cardLast4;
+            }
+            if (t.bankOrIssuer.isNotEmpty && existing.bankOrIssuer == null) {
+              existing.bankOrIssuer = t.bankOrIssuer;
+            }
+          }
+        }
+      }
+
+      final payloads = <Map<String, dynamic>>[];
+
+      // 2. Map Statements and genuine one-off email transactions
+      for (final t in transactions) {
+        final key = t.merchantName.trim().toLowerCase();
+        // Skip individual recurring subscription receipts from being saved as separate transaction rows;
+        // they are consolidated into a single subscription entry below.
+        // NOTE: Statements (isStatement == true) MUST always be preserved so their PDF paths and bill due dates are retained!
+        if (!t.isStatement && consolidatedSubs.containsKey(key)) {
+          continue;
+        }
+
+        payloads.add({
+          'user_id': userId,
+          'gmail_message_id': t.gmailMessageId,
+          'amount': t.amount,
+          'currency': t.currency,
+          'merchant_name': t.merchantName,
+          'payment_mode': t.paymentMode,
+          'transaction_type': t.type == TransactionType.credit ? 'CREDIT' : 'DEBIT',
+          'card_last4': t.cardLast4,
+          'bank_or_issuer': t.bankOrIssuer,
+          'transaction_date': t.transactionDate.toUtc().toIso8601String(),
+          'narration': t.narration,
+          'category': t.category,
+          'is_recurring': false,
+          'recurring_frequency': null,
+          'typical_due_day': null,
+          'is_statement': t.isStatement,
+          'statement_pdf_path': t.statementPdfPath,
+          'statement_period': t.statementPeriod,
+          'statement_due_date': t.statementDueDate?.toUtc().toIso8601String(),
+          'statement_total_due': t.statementTotalDue,
+          'statement_min_due': t.statementMinDue,
+          'updated_at': nowUtc,
+        });
+      }
+
+      // 3. Map exactly ONE record per subscription service with complete details
+      for (final sub in consolidatedSubs.values) {
+        final syntheticMessageId = 'sub_${sub.serviceName.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '_')}';
+        payloads.add({
+          'user_id': userId,
+          'gmail_message_id': syntheticMessageId,
+          'amount': sub.expectedAmount,
+          'currency': sub.currency,
+          'merchant_name': sub.serviceName,
+          'payment_mode': 'SUBSCRIPTION',
+          'transaction_type': 'DEBIT',
+          'card_last4': sub.cardLast4,
+          'bank_or_issuer': sub.bankOrIssuer ?? 'Email Subscription',
+          'transaction_date': sub.latestBillingDate.toUtc().toIso8601String(),
+          'narration': 'Subscription renewal: ${sub.serviceName}',
+          'category': sub.category,
+          'is_recurring': true,
+          'recurring_frequency': sub.frequency,
+          'typical_due_day': sub.typicalDueDay,
+          'is_statement': false,
+          'updated_at': nowUtc,
+        });
+      }
+
+      if (payloads.isNotEmpty) {
+        // Chunk into batches of 50 for safety
+        const int chunkSize = 50;
+        for (var i = 0; i < payloads.length; i += chunkSize) {
+          final chunk = payloads.sublist(
+            i,
+            i + chunkSize > payloads.length ? payloads.length : i + chunkSize,
+          );
+          await client.from('email_extracted_transactions').upsert(
+            chunk,
+            onConflict: 'user_id,gmail_message_id',
+          );
+        }
+      }
+
+      // 4. Clean up any historical duplicate raw rows in public.email_extracted_transactions
+      for (final sub in consolidatedSubs.values) {
+        final syntheticMessageId = 'sub_${sub.serviceName.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '_')}';
+        try {
+          await client
+              .from('email_extracted_transactions')
+              .delete()
+              .eq('user_id', userId)
+              .ilike('merchant_name', sub.serviceName)
+              .neq('gmail_message_id', syntheticMessageId);
+        } catch (e) {
+          debugPrint('[Supabase DB] Error removing duplicate subscription rows: $e');
+        }
+
+        // Also upsert into user_recurring_commitments so rhythm calculations stay aligned
+        try {
+          await upsertRecurringCommitment(
+            merchantName: sub.serviceName,
+            expectedAmount: sub.expectedAmount,
+            category: sub.category,
+            typicalDueDay: sub.typicalDueDay,
+            frequency: sub.frequency,
+            userId: userId,
+          );
+        } catch (_) {}
+      }
+
+      debugPrint('[Supabase DB] Successfully saved ${payloads.length} records to email_extracted_transactions');
+      return true;
+    } catch (e, stack) {
+      debugPrint('[Supabase DB] Error saving email_extracted_transactions: $e\n$stack');
+      return false;
+    }
+  }
+
+  /// Cleans up any duplicate subscription rows in email_extracted_transactions for a user,
+  /// ensuring each recurring service has exactly one record.
+  Future<void> cleanupDuplicateSubscriptions(String userId) async {
+    final client = _effectiveClient;
+    if (client == null) return;
+    try {
+      final rows = await client
+          .from('email_extracted_transactions')
+          .select('id, merchant_name, gmail_message_id, is_recurring, category')
+          .eq('user_id', userId);
+
+      final List<Map<String, dynamic>> subRows = List<Map<String, dynamic>>.from(rows)
+          .where((r) => r['is_recurring'] == true || r['category'] == 'Subscription')
+          .toList();
+
+      final Map<String, List<Map<String, dynamic>>> byMerchant = {};
+      for (final r in subRows) {
+        final name = (r['merchant_name'] ?? '').toString().trim().toLowerCase();
+        if (name.isNotEmpty) {
+          byMerchant.putIfAbsent(name, () => []).add(r);
+        }
+      }
+
+      for (final entry in byMerchant.entries) {
+        final list = entry.value;
+        if (list.length > 1) {
+          final canonical = list.firstWhere(
+            (r) => r['gmail_message_id']?.toString().startsWith('sub_') ?? false,
+            orElse: () => list.first,
+          );
+          final idsToDelete = list
+              .where((r) => r['id'] != canonical['id'])
+              .map((r) => r['id'].toString())
+              .toList();
+
+          if (idsToDelete.isNotEmpty) {
+            await client
+                .from('email_extracted_transactions')
+                .delete()
+                .inFilter('id', idsToDelete);
+            debugPrint('[Supabase DB] Cleaned up ${idsToDelete.length} duplicates for ${entry.key}');
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('[Supabase DB] Error cleaning up duplicate subscriptions: $e');
+    }
+  }
+
+  /// Clears legacy hardcoded email extracted subscriptions and commitments
+  Future<void> clearLegacyExtractedSubscriptions({required String userId}) async {
+    final client = _effectiveClient;
+    if (client == null) return;
+    try {
+      await client
+          .from('email_extracted_transactions')
+          .delete()
+          .eq('user_id', userId)
+          .like('gmail_message_id', 'sub_%');
+      await client
+          .from('user_recurring_commitments')
+          .delete()
+          .eq('user_id', userId)
+          .or('merchant_name.eq.Vi,merchant_name.eq.Jio');
+      debugPrint('[Supabase DB] Cleared legacy hardcoded subscriptions for $userId');
+    } catch (e) {
+      debugPrint('[Supabase DB] Error clearing legacy extracted subscriptions: $e');
+    }
+  }
+
+  /// Fetches saved email transactions from email_extracted_transactions
+  Future<List<Map<String, dynamic>>> fetchEmailExtractedTransactions({
+    String? userId,
+    int limit = 100,
+  }) async {
+    final client = _effectiveClient;
+    final uid = userId ?? currentUserId;
+    if (client == null || uid == null) return [];
+
+    try {
+      final res = await client
+          .from('email_extracted_transactions')
+          .select()
+          .eq('user_id', uid)
+          .order('transaction_date', ascending: false)
+          .limit(limit);
+      return List<Map<String, dynamic>>.from(res);
+    } catch (e) {
+      debugPrint('[Supabase DB] fetchEmailExtractedTransactions error: $e');
+      return [];
+    }
+  }
+
+  /// Fetches the count of email extracted transactions for a given user
+  Future<int> countEmailExtractedTransactions([String? userId]) async {
+    final client = _effectiveClient;
+    final uid = userId ?? currentUserId;
+    if (client == null || uid == null) return 0;
+
+    try {
+      final res = await client
+          .from('email_extracted_transactions')
+          .select('id')
+          .eq('user_id', uid)
+          .count(CountOption.exact);
+      return res.count;
+    } catch (e) {
+      debugPrint('[Supabase DB] countEmailExtractedTransactions error: $e');
+      return 0;
+    }
+  }
+
+  /// Uploads a Credit Card Statement PDF to the secure 'statements' Supabase storage bucket,
+  /// strictly organized by user_id: `<user_id>/<filename>`
+  Future<String?> uploadStatementPdfToStorage({
+    required String userId,
+    required String filename,
+    required Uint8List pdfBytes,
+  }) async {
+    final client = _effectiveClient;
+    if (client == null) return null;
+
+    try {
+      // Normalize filename to avoid collision or unsafe characters
+      final safeName = filename.replaceAll(RegExp(r'[^a-zA-Z0-9_\-\.]'), '_');
+      final storagePath = '$userId/$safeName';
+
+      await client.storage.from('statements').uploadBinary(
+            storagePath,
+            pdfBytes,
+            fileOptions: const FileOptions(
+              contentType: 'application/pdf',
+              upsert: true,
+            ),
+          );
+
+      debugPrint('[Supabase Storage] Successfully uploaded statement PDF: $storagePath');
+      return storagePath;
+    } catch (e, stack) {
+      debugPrint('[Supabase Storage] Error uploading statement PDF: $e\n$stack');
+      return null;
+    }
+  }
+
+  /// Creates a temporary signed URL to download or view a private statement PDF
+  Future<String?> getStatementPdfSignedUrl({
+    required String storagePath,
+    int expiresInSeconds = 3600,
+  }) async {
+    final client = _effectiveClient;
+    if (client == null) return null;
+
+    try {
+      final signedUrl = await client.storage.from('statements').createSignedUrl(
+            storagePath,
+            expiresInSeconds,
+          );
+      return signedUrl;
+    } catch (e) {
+      debugPrint('[Supabase Storage] Error getting signed URL for $storagePath: $e');
+      return null;
+    }
+  }
+
+  /// Downloads a statement PDF from the 'statements' bucket as raw bytes
+  Future<Uint8List?> downloadStatementPdfFromStorage({
+    required String storagePath,
+  }) async {
+    final client = _effectiveClient;
+    if (client == null) return null;
+
+    try {
+      final bytes = await client.storage.from('statements').download(storagePath);
+      return bytes;
+    } catch (e) {
+      debugPrint('[Supabase Storage] Error downloading statement PDF $storagePath: $e');
+      return null;
+    }
+  }
+
+  // ===========================================================================
+  // 12. CREDIT CARD STATEMENT TRANSACTIONS
+  // ===========================================================================
+
+  /// Saves itemized credit card transactions into public.credit_card_transactions,
+  /// guaranteeing idempotent upserts keyed on (user_id, reference_id).
+  Future<bool> saveCreditCardTransactions({
+    required List<SliceCreditCardTransaction> transactions,
+    required String userId,
+    String? statementId,
+    String? statementPdfPath,
+    String? cardLast4,
+    String? billingCycle,
+    DateTime? dueDate,
+  }) async {
+    final client = _effectiveClient;
+    if (client == null || transactions.isEmpty) return false;
+
+    try {
+      final payloads = transactions
+          .map((t) => t.toMap(
+                userId: userId,
+                statementId: statementId,
+                statementPdfPath: statementPdfPath,
+                cardLast4: cardLast4,
+                billingCycle: billingCycle,
+                dueDate: dueDate,
+              ))
+          .toList();
+
+      const int chunkSize = 50;
+      for (var i = 0; i < payloads.length; i += chunkSize) {
+        final chunk = payloads.sublist(
+          i,
+          i + chunkSize > payloads.length ? payloads.length : i + chunkSize,
+        );
+        await client.from('credit_card_transactions').upsert(
+              chunk,
+              onConflict: 'user_id,reference_id',
+            );
+      }
+
+      debugPrint(
+        '[Supabase DB] Successfully saved ${payloads.length} records to credit_card_transactions',
+      );
+      return true;
+    } catch (e, stack) {
+      debugPrint('[Supabase DB] Error saving credit_card_transactions: $e\n$stack');
+      return false;
+    }
+  }
+
+  /// Fetches saved credit card transactions from public.credit_card_transactions
+  Future<List<Map<String, dynamic>>> fetchCreditCardTransactions({
+    required String userId,
+    String? cardLast4,
+    String? statementId,
+    int limit = 100,
+    int offset = 0,
+  }) async {
+    final client = _effectiveClient;
+    if (client == null) return [];
+
+    try {
+      var query = client
+          .from('credit_card_transactions')
+          .select()
+          .eq('user_id', userId);
+
+      if (statementId != null && statementId.isNotEmpty) {
+        query = query.eq('statement_id', statementId);
+      } else if (cardLast4 != null && cardLast4.isNotEmpty) {
+        query = query.eq('card_last4', cardLast4);
+      }
+
+      final res = await query
+          .order('transaction_date', ascending: false)
+          .range(offset, offset + limit - 1);
+
+      return List<Map<String, dynamic>>.from(res as List);
+    } catch (e) {
+      debugPrint('[Supabase DB] Error fetching credit_card_transactions: $e');
+      return [];
+    }
+  }
+
+  /// Returns total count of credit card transactions for a user
+  Future<int> countCreditCardTransactions(String userId) async {
+    final client = _effectiveClient;
+    if (client == null) return 0;
+
+    try {
+      final res = await client
+          .from('credit_card_transactions')
+          .select('id')
+          .eq('user_id', userId);
+      return (res as List).length;
+    } catch (e) {
+      debugPrint('[Supabase DB] Error counting credit_card_transactions: $e');
+      return 0;
+    }
+  }
+
+  // ===========================================================================
+  // 11. REMINDERS & SERVERLESS ML CLASSIFICATION (MODAL PIPELINE)
+  // ===========================================================================
+
+  /// Dispatches email messages to the serverless ML classification pipeline
+  /// running on Supabase Edge Function (`classify-emails`), which invokes Modal.com
+  /// (GLiClass + GLiNER) and directly persists the detected reminders in Postgres.
+  Future<Map<String, dynamic>> classifyEmailsViaBackend({
+    required List<Map<String, dynamic>> messages,
+    String? timezone,
+    bool includeDecisions = false,
+  }) async {
+    final client = _effectiveClient;
+    if (client == null) {
+      throw Exception('Supabase client is not configured or authenticated.');
+    }
+
+    final response = await client.functions.invoke(
+      'classify-emails',
+      body: {
+        'messages': messages,
+        'timezone': timezone ?? 'Asia/Kolkata',
+        'include_decisions': includeDecisions,
+      },
+    );
+
+    if (response.status >= 400) {
+      final data = response.data;
+      throw Exception(
+        'Serverless email classification failed (${response.status}): ${data is Map ? data['message'] ?? data['error'] ?? data : data}',
+      );
+    }
+
+    return (response.data is Map<String, dynamic>)
+        ? response.data as Map<String, dynamic>
+        : Map<String, dynamic>.from(response.data as Map);
+  }
+
+  /// Fetches reminders detected and persisted by the serverless ML pipeline
+  Future<List<ReminderModel>> fetchReminders({
+    String? userId,
+    bool includeDismissed = false,
+  }) async {
+    final client = _effectiveClient;
+    final uid = userId ?? currentUserId;
+    if (client == null || uid == null) return [];
+
+    try {
+      var query = client
+          .from('reminders')
+          .select()
+          .eq('user_id', uid);
+
+      if (!includeDismissed) {
+        query = query.eq('is_dismissed', false);
+      }
+
+      final res = await query.order('due_date', ascending: true, nullsFirst: false);
+      return (res as List)
+          .map((row) => ReminderModel.fromMap(Map<String, dynamic>.from(row as Map)))
+          .toList();
+    } catch (e) {
+      debugPrint('[Supabase DB] Error fetching reminders: $e');
+      return [];
+    }
+  }
+
+  /// Updates dismissal status of a reminder
+  Future<bool> dismissReminder(String reminderId, {bool isDismissed = true}) async {
+    final client = _effectiveClient;
+    if (client == null) return false;
+
+    try {
+      await client
+          .from('reminders')
+          .update({'is_dismissed': isDismissed, 'updated_at': DateTime.now().toUtc().toIso8601String()})
+          .eq('reminder_id', reminderId);
+      return true;
+    } catch (e) {
+      debugPrint('[Supabase DB] Error dismissing reminder $reminderId: $e');
+      return false;
+    }
+  }
+
+  /// Toggles whether a reminder has been paid / actioned by the user
+  Future<bool> toggleReminderActioned(String reminderId, {required bool isActioned}) async {
+    final client = _effectiveClient;
+    if (client == null) return false;
+
+    try {
+      await client
+          .from('reminders')
+          .update({'is_actioned': isActioned, 'updated_at': DateTime.now().toUtc().toIso8601String()})
+          .eq('reminder_id', reminderId);
+      return true;
+    } catch (e) {
+      debugPrint('[Supabase DB] Error updating actioned status for $reminderId: $e');
+      return false;
+    }
+  }
+
+  // ===========================================================================
+  // 13. STATEMENT INTELLIGENCE API (MODAL OCR & GEMINI PIPELINE)
+  // ===========================================================================
+
+  /// Submits and processes a statement PDF via the Supabase Edge Function (`process-statement`).
+  /// Invokes Modal.com (Tesseract OCR + multi-engine geometry + Gemini Flash Lite) in the cloud,
+  /// reconciles running balances, and persists transactions to `bank_transactions` or `credit_card_transactions`.
+  Future<Map<String, dynamic>> processStatementViaBackend({
+    required String storagePath,
+    String? filename,
+    String? password,
+    String? messageId,
+    bool waitForCompletion = true,
+  }) async {
+    final client = _effectiveClient;
+    if (client == null) {
+      throw Exception('Supabase client is not configured or authenticated.');
+    }
+
+    final response = await client.functions.invoke(
+      'process-statement',
+      body: {
+        'action': 'submit',
+        'storage_path': storagePath,
+        'filename': filename,
+        'password': password,
+        'message_id': messageId,
+        'wait_for_completion': waitForCompletion,
+      },
+    );
+
+    final data = response.data;
+    if (response.status >= 400 || (data is Map && data['error'] != null)) {
+      final msg = (data is Map ? (data['message'] ?? data['error']) : null) ??
+          'Statement extraction failed with HTTP status ${response.status}';
+      throw Exception(msg);
+    }
+
+    if (data is Map<String, dynamic>) {
+      return data;
+    }
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  /// Polls the status of an ongoing statement extraction job
+  Future<Map<String, dynamic>> pollStatementJob(String jobId) async {
+    final client = _effectiveClient;
+    if (client == null) {
+      throw Exception('Supabase client is not configured or authenticated.');
+    }
+
+    final response = await client.functions.invoke(
+      'process-statement',
+      body: {
+        'action': 'poll',
+        'job_id': jobId,
+      },
+    );
+
+    final data = response.data;
+    if (response.status >= 400 || (data is Map && data['error'] != null)) {
+      final msg = (data is Map ? (data['message'] ?? data['error']) : null) ??
+          'Statement polling failed with HTTP status ${response.status}';
+      throw Exception(msg);
+    }
+
+    if (data is Map<String, dynamic>) {
+      return data;
+    }
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  /// Fetches a statement job record directly from public.statement_jobs
+  Future<Map<String, dynamic>?> fetchStatementJob(String jobId) async {
+    final client = _effectiveClient;
+    if (client == null) return null;
+
+    try {
+      final res = await client
+          .from('statement_jobs')
+          .select()
+          .eq('job_id', jobId)
+          .maybeSingle();
+      return res != null ? Map<String, dynamic>.from(res) : null;
+    } catch (e) {
+      debugPrint('[Supabase DB] Error fetching statement job: $e');
+      return null;
+    }
+  }
 }
+
+class _ConsolidatedSubscription {
+  final String serviceName;
+  double expectedAmount;
+  final String currency;
+  int typicalDueDay;
+  final String frequency;
+  DateTime latestBillingDate;
+  String? cardLast4;
+  String? bankOrIssuer;
+  String category;
+
+  _ConsolidatedSubscription({
+    required this.serviceName,
+    required this.expectedAmount,
+    required this.currency,
+    required this.typicalDueDay,
+    required this.frequency,
+    required this.latestBillingDate,
+    this.cardLast4,
+    this.bankOrIssuer,
+    this.category = 'Subscription',
+  });
+}
+
+

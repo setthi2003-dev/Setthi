@@ -4,9 +4,22 @@ import 'dart:io';
 import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 import 'package:google_sign_in/google_sign_in.dart';
+import 'package:http/http.dart' as http;
 import 'package:sign_in_with_apple/sign_in_with_apple.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../config/supabase_config.dart';
+import 'gmail_rate_limiter.dart';
+
+/// Structured result from on-device Gmail OAuth authorization
+class GmailAuthResult {
+  final String? accessToken;
+  final String? errorMessage;
+  final String? email;
+
+  const GmailAuthResult({this.accessToken, this.errorMessage, this.email});
+
+  bool get isSuccess => accessToken != null && accessToken!.isNotEmpty;
+}
 
 /// Service managing user authentication with Supabase, supporting
 /// email/password sign-up & sign-in, and Google OAuth.
@@ -78,22 +91,29 @@ class AuthService {
     return response;
   }
 
+  static const String googleWebClientId =
+      '473884945637-in2cv7vk192k7se5vvad71s05qr75and.apps.googleusercontent.com';
+  static const String googleIosClientId =
+      '473884945637-150nfrlqch91jg9f833u6ni8v6ju00rv.apps.googleusercontent.com';
+  static const String gmailReadonlyScope =
+      'https://www.googleapis.com/auth/gmail.readonly';
+
+  GoogleSignIn _buildGoogleSignIn({List<String>? scopes}) {
+    return GoogleSignIn(
+      clientId: (!kIsWeb && Platform.isIOS) ? googleIosClientId : null,
+      serverClientId: googleWebClientId,
+      scopes: scopes ?? ['email', 'profile', 'openid'],
+    );
+  }
+
   /// Sign in using Google (Native Google Sign-In with Web OAuth fallback)
   Future<bool> signInWithGoogle() async {
-    const webClientId =
-        '473884945637-in2cv7vk192k7se5vvad71s05qr75and.apps.googleusercontent.com';
-    const iosClientId =
-        '473884945637-150nfrlqch91jg9f833u6ni8v6ju00rv.apps.googleusercontent.com';
     const redirectUrl = kIsWeb ? null : 'io.supabase.setthi://login-callback';
 
     // 1. Attempt Native Google Sign-In
     if (!kIsWeb) {
       try {
-        final googleSignIn = GoogleSignIn(
-          clientId: (!kIsWeb && Platform.isIOS) ? iosClientId : null,
-          serverClientId: webClientId, // Required for Supabase aud verification
-          scopes: ['email', 'profile', 'openid'],
-        );
+        final googleSignIn = _buildGoogleSignIn();
 
         final googleUser = await googleSignIn.signIn();
         if (googleUser == null) {
@@ -117,11 +137,20 @@ class AuthService {
             accessToken: accessToken,
           );
 
-          return response.session != null;
+          if (response.session != null) {
+            // Once the Supabase auth session is established, sign out from
+            // the native GoogleSignIn instance so that the app's sign-in
+            // credentials do not automatically bleed into or map to Gmail sync.
+            try {
+              await googleSignIn.signOut();
+            } catch (_) {}
+            return true;
+          }
+          return false;
         } else {
           debugPrint(
             '[AuthService] Google Sign-In returned null idToken. '
-            'This occurs when the Android SHA-1 fingerprint is not associated with webClientId ($webClientId).',
+            'This occurs when the Android SHA-1 fingerprint is not associated with webClientId ($googleWebClientId).',
           );
         }
       } catch (e, stack) {
@@ -138,6 +167,194 @@ class AuthService {
       authScreenLaunchMode: LaunchMode.externalApplication,
     );
     return success;
+  }
+
+  /// Incrementally requests the `gmail.readonly` scope and returns an OAuth access token
+  /// for direct on-device Gmail REST API calls. Does NOT modify initial app login scopes.
+  /// If [promptIfUnauthenticated] is false, it attempts silent retrieval ONLY if [expectedEmail]
+  /// is specified from an existing, user-confirmed connection.
+  Future<GmailAuthResult> connectAndGetGmailAccessToken({
+    bool promptIfUnauthenticated = true,
+    String? expectedEmail,
+  }) async {
+    if (kIsWeb) {
+      return const GmailAuthResult(
+        errorMessage: 'Gmail API sync is supported natively on Android and iOS.',
+      );
+    }
+
+    try {
+      final googleSignIn = _buildGoogleSignIn(
+        scopes: ['email', 'profile', 'openid', gmailReadonlyScope],
+      );
+
+      // 1. Silent Check: ONLY perform silent token check if the user previously
+      // connected an explicit account. Never silently bind an unlinked user.
+      if (!promptIfUnauthenticated && (expectedEmail == null || expectedEmail.isEmpty)) {
+        return const GmailAuthResult(
+          errorMessage: 'Gmail is not connected. Please connect your account.',
+        );
+      }
+
+      GoogleSignInAccount? user = googleSignIn.currentUser;
+      user ??= await googleSignIn.signInSilently();
+
+      if (user != null) {
+        final emailMatches = expectedEmail == null ||
+            expectedEmail.isEmpty ||
+            user.email.trim().toLowerCase() == expectedEmail.trim().toLowerCase();
+
+        if (emailMatches) {
+          try {
+            final auth = await user.authentication;
+            final accessToken = auth.accessToken;
+            if (accessToken != null && accessToken.isNotEmpty) {
+              final verifyRes = await verifyGmailTokenResponse(accessToken);
+              if (verifyRes != null && verifyRes.statusCode == 200) {
+                debugPrint(
+                  '[AuthService] Reusing active verified Gmail access token for ${user.email} (Zero prompt)',
+                );
+                return GmailAuthResult(accessToken: accessToken, email: user.email);
+              }
+            }
+          } catch (silentErr) {
+            debugPrint('[AuthService] Silent token retrieval note: $silentErr');
+          }
+        } else {
+          debugPrint(
+            '[AuthService] Cached Google account (${user.email}) does not match expected Gmail account ($expectedEmail)',
+          );
+        }
+      }
+
+      // 2. If silent token failed and we are not supposed to prompt, return cleanly
+      if (!promptIfUnauthenticated) {
+        return const GmailAuthResult(
+          errorMessage: 'Gmail is not connected. Please connect your account.',
+        );
+      }
+
+      // 3. User needs interactive authorization for Gmail scopes (SINGLE PROMPT)
+      debugPrint('[AuthService] Performing interactive sign-in with Gmail scopes...');
+
+      // Reset any cached GoogleSignIn session to ensure Google presents the full
+      // interactive consent sheet including Gmail scopes in a SINGLE prompt.
+      // (Note: This does NOT affect the user's Supabase session).
+      try {
+        await googleSignIn.signOut();
+      } catch (_) {}
+
+      user = await googleSignIn.signIn();
+      if (user == null) {
+        debugPrint('[AuthService] User cancelled Google Sign-In for Gmail');
+        return const GmailAuthResult(
+          errorMessage: 'Google Sign-In was cancelled.',
+        );
+      }
+
+      try {
+        await user.clearAuthCache();
+      } catch (_) {}
+
+      final auth = await user.authentication;
+      final accessToken = auth.accessToken;
+      if (accessToken == null || accessToken.isEmpty) {
+        debugPrint('[AuthService] Could not obtain accessToken for Gmail API');
+        return const GmailAuthResult(
+          errorMessage: 'Could not obtain access token from Google.',
+        );
+      }
+
+      // Verify token access directly with Gmail API (exactly once, no re-prompt loops)
+      final verifyRes = await verifyGmailTokenResponse(accessToken);
+      debugPrint(
+        '[AuthService] Gmail API validation response (${verifyRes?.statusCode}): ${verifyRes?.body}',
+      );
+
+      if (verifyRes != null && verifyRes.statusCode == 200) {
+        debugPrint(
+          '[AuthService] Successfully verified Gmail access token for ${user.email}',
+        );
+        return GmailAuthResult(accessToken: accessToken, email: user.email);
+      } else if (verifyRes != null && verifyRes.statusCode == 403) {
+        final bodyJson = jsonDecode(verifyRes.body) as Map<String, dynamic>?;
+        final errorMsg =
+            bodyJson?['error']?['message']?.toString() ?? verifyRes.body;
+
+        if (errorMsg.contains('disabled') ||
+            errorMsg.contains('has not been used')) {
+          return const GmailAuthResult(
+            errorMessage:
+                'Gmail API is disabled in your Google Cloud Console project. Please enable Gmail API in Google Cloud Console.',
+          );
+        } else if (errorMsg.contains('insufficient') ||
+            errorMsg.contains('scope')) {
+          return const GmailAuthResult(
+            errorMessage:
+                'Gmail permission was not granted. Please make sure to tick the checkbox next to "View your email messages" on the Google consent prompt.',
+          );
+        }
+        return GmailAuthResult(errorMessage: 'Google Cloud error: $errorMsg');
+      }
+
+      if (verifyRes == null) {
+        return const GmailAuthResult(
+          errorMessage:
+              'Unable to reach Google servers. Please check your internet connection.',
+        );
+      }
+
+      return GmailAuthResult(accessToken: accessToken, email: user.email);
+    } catch (e, stack) {
+      debugPrint('[AuthService] Error obtaining Gmail access token: $e\n$stack');
+      return GmailAuthResult(errorMessage: 'Authentication error: $e');
+    }
+  }
+
+  /// Sends a profile query to Gmail API to check validity and status of an access token.
+  Future<http.Response?> verifyGmailTokenResponse(String accessToken, {String? accountEmail}) async {
+    try {
+      final verifyUri =
+          Uri.parse('https://gmail.googleapis.com/gmail/v1/users/me/profile');
+      return await GmailRateLimiter.instance.executeWithRetry<http.Response>(
+        op: GmailApiOp.getProfile,
+        accountEmail: accountEmail,
+        requestAction: () => http.get(
+          verifyUri,
+          headers: {'Authorization': 'Bearer $accessToken'},
+        ),
+        getStatusCode: (res) => res.statusCode,
+        getResponseBody: (res) => res.body,
+      );
+    } catch (e) {
+      debugPrint('[AuthService] Token check network error: $e');
+      return null;
+    }
+  }
+
+  /// Verifies if an OAuth access token has active permission to read the Gmail API.
+  Future<bool> verifyGmailAccessToken(String accessToken) async {
+    final res = await verifyGmailTokenResponse(accessToken);
+    return res != null && res.statusCode == 200;
+  }
+
+  /// Disconnects Gmail access and clears active session tokens
+  Future<bool> disconnectGmail() async {
+    try {
+      final googleSignIn = _buildGoogleSignIn(
+        scopes: ['email', 'profile', 'openid', gmailReadonlyScope],
+      );
+      try {
+        await googleSignIn.disconnect();
+      } catch (_) {}
+      try {
+        await googleSignIn.signOut();
+      } catch (_) {}
+      return true;
+    } catch (e) {
+      debugPrint('[AuthService] Note disconnecting Google Sign-In: $e');
+      return false;
+    }
   }
 
   /// Sign in using native Apple ID Credential and Supabase signInWithIdToken
@@ -340,7 +557,13 @@ class AuthService {
 
   /// Sign out the current user session
   Future<void> signOut() async {
-    await _effectiveClient.auth.signOut();
+    try {
+      await _effectiveClient.auth.signOut();
+    } finally {
+      try {
+        await _buildGoogleSignIn().signOut();
+      } catch (_) {}
+    }
   }
 
   /// Permanently deletes the current user account and purges all financial data.
@@ -383,6 +606,9 @@ class AuthService {
       } catch (e) {
         debugPrint('[AuthService] Post-deletion sign-out warning: $e');
       }
+      try {
+        await _buildGoogleSignIn().signOut();
+      } catch (_) {}
     }
 
     return true;

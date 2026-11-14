@@ -4,7 +4,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../config/supabase_config.dart';
 import '../models/chat_message_model.dart';
 import '../services/chat_service.dart';
+import 'auth_providers.dart';
+import 'gmail_sync_provider.dart';
 import 'supabase_provider.dart';
+import 'transaction_providers.dart';
 
 /// Provider exposing the HTTP ChatService for SSE communications
 final chatServiceProvider = Provider<ChatService>((ref) {
@@ -262,6 +265,28 @@ class ChatMessagesNotifier extends AsyncNotifier<List<ChatMessage>> {
     );
     state = AsyncData([assistantMsg]);
   }
+
+  /// Adds a local prompt-response pair without calling backend or deducting credits
+  void addLocalExchange({
+    required String userPrompt,
+    required String assistantResponse,
+  }) {
+    final currentList = state.value ?? [];
+    final userMsg = ChatMessage(
+      id: _generateId(),
+      role: ChatRole.user,
+      content: userPrompt,
+      createdAt: DateTime.now(),
+    );
+    final assistantMsg = ChatMessage(
+      id: _generateId(),
+      role: ChatRole.assistant,
+      content: assistantResponse,
+      createdAt: DateTime.now().add(const Duration(milliseconds: 100)),
+      isStreaming: false,
+    );
+    state = AsyncData([...currentList, userMsg, assistantMsg]);
+  }
 }
 
 final chatMessagesProvider =
@@ -303,3 +328,42 @@ final setthiIcebreakerProvider =
     NotifierProvider<SetthiIcebreakerNotifier, SetthiIcebreakerData?>(
   SetthiIcebreakerNotifier.new,
 );
+
+/// Checks whether the user has any synced bank, credit card, email, or reminder data
+final hasFinancialDataProvider = FutureProvider<bool>((ref) async {
+  final user = ref.watch(currentUserProvider);
+  if (user == null) return false;
+
+  // 1. Fast in-memory check of bank transaction feed
+  final feed = ref.watch(transactionFeedProvider).asData?.value;
+  if (feed != null && feed.isNotEmpty) return true;
+
+  // 2. Fast in-memory check of gmail sync state
+  final gmailState = ref.watch(gmailSyncProvider);
+  if (gmailState.isConnected) return true;
+  if (gmailState.savedTransactions.isNotEmpty) return true;
+  if (gmailState.savedReminders.isNotEmpty) return true;
+
+  // 3. Fast in-memory check of reminders from ML pipeline
+  final reminders = ref.watch(remindersProvider).asData?.value;
+  if (reminders != null && reminders.isNotEmpty) return true;
+
+  // 4. Lightweight database query checks
+  try {
+    final dbService = ref.read(supabaseDbServiceProvider);
+    final bankCount = await dbService.countStoredTransactions(user.id);
+    if (bankCount > 0) return true;
+
+    final emailCount = await dbService.countEmailExtractedTransactions(user.id);
+    if (emailCount > 0) return true;
+
+    final ccCount = await dbService.countCreditCardTransactions(user.id);
+    if (ccCount > 0) return true;
+
+    final remindersList = await dbService.fetchReminders(userId: user.id);
+    if (remindersList.isNotEmpty) return true;
+  } catch (_) {}
+
+  return false;
+});
+

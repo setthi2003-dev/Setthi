@@ -1,10 +1,11 @@
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import '../config/dpc_tokens.dart';
 import 'ai_companion_rive_widget.dart';
 
 /// Floating Bottom Navigation Dock
-/// Elevated dark island dock providing quick actions (Home, AI, Sync, Bank, Profile).
-/// Clean, icon-only layout preventing any RenderFlex overflows on all device sizes.
+/// Elevated dark island dock providing quick actions (AI, Insights, Gmail Sync, Profile).
+/// Frosted glass aesthetic with generous negative space and micro-blur depth.
 class DpcFloatingNavDock extends StatelessWidget {
   final int activeIndex;
   final VoidCallback? onAiTap;
@@ -15,8 +16,10 @@ class DpcFloatingNavDock extends StatelessWidget {
   final VoidCallback? onProfileTap;
   final VoidCallback? onSyncTap;
   final VoidCallback? onAiChatTap;
+  final VoidCallback? onGmailTap;
   final bool isSyncing;
   final bool hasActiveConsent;
+  final bool isGmailConnected;
 
   const DpcFloatingNavDock({
     super.key,
@@ -29,8 +32,10 @@ class DpcFloatingNavDock extends StatelessWidget {
     this.onProfileTap,
     this.onSyncTap,
     this.onAiChatTap,
+    this.onGmailTap,
     this.isSyncing = false,
     this.hasActiveConsent = false,
+    this.isGmailConnected = false,
   });
 
   @override
@@ -40,15 +45,21 @@ class DpcFloatingNavDock extends StatelessWidget {
     final isTransactionsActive = activeIndex == 2;
     // ignore: unused_local_variable
     final isBankActive = activeIndex == 3;
+    final isGmailActive = activeIndex == 3;
     final isProfileActive = activeIndex == 4;
 
-    return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      decoration: DpcDecorations.floatingDock,
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceAround,
-        children: [
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(32),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+            decoration: DpcDecorations.floatingDock,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceAround,
+              children: [
           // 1. Setthi AI Page (replaces Home icon in slot 1)
           Tooltip(
             message: 'Setthi AI',
@@ -110,37 +121,38 @@ class DpcFloatingNavDock extends StatelessWidget {
             ),
           ),
 
-          // [COMMENTED OUT FROM UI - DO NOT REMOVE]
-          // 4. Link Bank / Accounts (forth page as it is)
-          // Tooltip(
-          //   message: hasActiveConsent ? 'Bank Feed Active' : 'Link Bank',
-          //   child: InkWell(
-          //     onTap: onBankTap,
-          //     borderRadius: BorderRadius.circular(16),
-          //     child: Container(
-          //       padding: const EdgeInsets.all(10),
-          //       decoration: BoxDecoration(
-          //         color: isBankActive ? DpcColors.surfaceElevated : Colors.transparent,
-          //         borderRadius: BorderRadius.circular(16),
-          //         border: isBankActive
-          //             ? Border.all(
-          //                 color: DpcColors.surfaceBorder,
-          //                 width: 1,
-          //               )
-          //             : null,
-          //       ),
-          //       child: Icon(
-          //         hasActiveConsent
-          //             ? Icons.verified_rounded
-          //             : Icons.account_balance_rounded,
-          //         size: 20,
-          //         color: isBankActive
-          //             ? DpcColors.textPrimary
-          //             : (hasActiveConsent ? DpcColors.textPrimary : DpcColors.textSecondary),
-          //       ),
-          //     ),
-          //   ),
-          // ),
+          // 3. Gmail Financial Sync Page
+          if (onGmailTap != null)
+            Tooltip(
+              message: 'Gmail Sync',
+              child: InkWell(
+                onTap: onGmailTap,
+                borderRadius: BorderRadius.circular(16),
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 200),
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: isGmailActive ? DpcColors.surfaceElevated : Colors.transparent,
+                    borderRadius: BorderRadius.circular(16),
+                    border: isGmailActive
+                        ? Border.all(
+                            color: DpcColors.surfaceBorder,
+                            width: 1,
+                          )
+                        : null,
+                  ),
+                  child: Icon(
+                    isGmailActive
+                        ? Icons.mail_rounded
+                        : Icons.mail_outline_rounded,
+                    size: 20,
+                    color: isGmailActive
+                        ? DpcColors.textPrimary
+                        : DpcColors.textSecondary,
+                  ),
+                ),
+              ),
+            ),
 
           // 5. Profile Button (fifth page as it is)
           if (onProfileTap != null)
@@ -176,7 +188,10 @@ class DpcFloatingNavDock extends StatelessWidget {
             ),
         ],
       ),
-    );
+    ),
+  ),
+),
+);
   }
 }
 

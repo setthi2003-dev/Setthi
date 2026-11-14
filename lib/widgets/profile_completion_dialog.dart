@@ -81,32 +81,32 @@ class _ProfileCompletionDialogState
   static const List<Map<String, String>> _incomeTypeOptions = [
     {
       'id': 'Salaried',
-      'label': 'Salaried Employee',
+      'label': 'Salaried',
       'desc': 'Predictable monthly payroll',
     },
     {
       'id': 'Freelancer',
-      'label': 'Freelancer / Contractor',
+      'label': 'Freelance',
       'desc': 'Variable project-based inflows',
     },
     {
       'id': 'Business',
-      'label': 'Business Owner',
+      'label': 'Business',
       'desc': 'Self-employed / revenue draws',
     },
     {
       'id': 'Allowance',
-      'label': 'Monthly Allowance',
+      'label': 'Allowance',
       'desc': 'Family support / stipend',
     },
     {
       'id': 'Passive',
-      'label': 'Pension / Passive Income',
-      'desc': 'Investments, rentals, annuities',
+      'label': 'Investments',
+      'desc': 'Rentals, dividends, annuities',
     },
     {
       'id': 'Other',
-      'label': 'Other / Prefer not to say',
+      'label': 'Other',
       'desc': 'Unspecified cashflow rhythm',
     },
   ];
@@ -356,29 +356,31 @@ class _ProfileCompletionDialogState
   }) {
     return InputDecoration(
       hintText: hint,
-      hintStyle: const TextStyle(color: DpcColors.textMuted, fontSize: 13),
-      prefixIcon: Icon(icon, color: DpcColors.textSecondary, size: 18),
+      hintStyle: const TextStyle(color: DpcColors.textMuted, fontSize: 12.5),
+      prefixIcon: Icon(icon, color: DpcColors.textSecondary, size: 17),
+      prefixIconConstraints: const BoxConstraints(minWidth: 36, minHeight: 36),
       filled: true,
       fillColor: DpcColors.bgOled,
-      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      isDense: true,
+      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9.5),
       border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(11),
         borderSide: const BorderSide(color: DpcColors.surfaceBorder),
       ),
       enabledBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(11),
         borderSide: const BorderSide(color: DpcColors.surfaceBorder),
       ),
       focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(11),
         borderSide: const BorderSide(color: DpcColors.accentPositive),
       ),
       errorBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(11),
         borderSide: const BorderSide(color: DpcColors.accentNegative),
       ),
       focusedErrorBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(11),
         borderSide: const BorderSide(color: DpcColors.accentNegative),
       ),
     );
@@ -392,15 +394,16 @@ class _ProfileCompletionDialogState
     return PopScope(
       canPop: !widget.isMandatory,
       child: Dialog(
-        backgroundColor: DpcColors.surfaceDark,
-        insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+        backgroundColor: const Color(0xF2121215), // Deep Obsidian Glass
+        insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(24),
-          side: const BorderSide(color: DpcColors.surfaceBorder, width: 1),
+          borderRadius: BorderRadius.circular(22),
+          side: const BorderSide(color: Color(0x26FFFFFF), width: 1), // 15% Hairline
         ),
         child: SingleChildScrollView(
+          physics: const BouncingScrollPhysics(),
           child: Padding(
-            padding: const EdgeInsets.all(22),
+            padding: const EdgeInsets.fromLTRB(18, 16, 18, 16),
             child: Form(
               key: _formKey,
               child: Column(
@@ -411,23 +414,23 @@ class _ProfileCompletionDialogState
                   Row(
                     children: [
                       Container(
-                        width: 44,
-                        height: 44,
+                        width: 38,
+                        height: 38,
                         decoration: BoxDecoration(
                           color: DpcColors.surfaceTrack,
-                          borderRadius: BorderRadius.circular(12),
+                          borderRadius: BorderRadius.circular(11),
                           border: Border.all(
-                            color: DpcColors.surfaceBorder,
+                            color: const Color(0x1AFFFFFF),
                             width: 1,
                           ),
                         ),
                         child: const Icon(
                           Icons.badge_outlined,
                           color: DpcColors.textPrimary,
-                          size: 22,
+                          size: 19,
                         ),
                       ),
-                      const SizedBox(width: 14),
+                      const SizedBox(width: 12),
                       const Expanded(
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
@@ -436,17 +439,17 @@ class _ProfileCompletionDialogState
                               'Complete Your Profile',
                               style: TextStyle(
                                 color: DpcColors.textPrimary,
-                                fontSize: 18,
-                                fontWeight: FontWeight.w800,
+                                fontSize: 17,
+                                fontWeight: FontWeight.w700,
                                 letterSpacing: -0.3,
                               ),
                             ),
-                            SizedBox(height: 2),
+                            SizedBox(height: 1),
                             Text(
                               'All fields are required to continue',
                               style: TextStyle(
                                 color: DpcColors.textSecondary,
-                                fontSize: 12,
+                                fontSize: 11.5,
                               ),
                             ),
                           ],
@@ -468,23 +471,23 @@ class _ProfileCompletionDialogState
                             child: const Icon(
                               Icons.close,
                               color: DpcColors.textSecondary,
-                              size: 16,
+                              size: 15,
                             ),
                           ),
                         ),
                     ],
                   ),
-                  const SizedBox(height: 20),
+                  const SizedBox(height: 14),
 
                   // Error message banner
                   if (_errorMessage != null) ...[
                     Container(
                       width: double.infinity,
-                      padding: const EdgeInsets.all(10),
-                      margin: const EdgeInsets.only(bottom: 14),
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                      margin: const EdgeInsets.only(bottom: 10),
                       decoration: BoxDecoration(
                         color: DpcColors.accentNegative.withValues(alpha: 0.12),
-                        borderRadius: BorderRadius.circular(10),
+                        borderRadius: BorderRadius.circular(9),
                         border: Border.all(
                           color: DpcColors.accentNegative.withValues(
                             alpha: 0.3,
@@ -495,7 +498,7 @@ class _ProfileCompletionDialogState
                         _errorMessage!,
                         style: const TextStyle(
                           color: DpcColors.accentNegative,
-                          fontSize: 12,
+                          fontSize: 11.5,
                         ),
                       ),
                     ),
@@ -508,7 +511,7 @@ class _ProfileCompletionDialogState
                         'Full Name',
                         style: TextStyle(
                           color: Colors.white70,
-                          fontSize: 12,
+                          fontSize: 11.5,
                           fontWeight: FontWeight.w600,
                         ),
                       ),
@@ -516,16 +519,16 @@ class _ProfileCompletionDialogState
                         ' *',
                         style: TextStyle(
                           color: DpcColors.accentNegative,
-                          fontSize: 12,
+                          fontSize: 11.5,
                           fontWeight: FontWeight.bold,
                         ),
                       ),
                     ],
                   ),
-                  const SizedBox(height: 6),
+                  const SizedBox(height: 4),
                   TextFormField(
                     controller: _nameController,
-                    style: const TextStyle(color: Colors.white, fontSize: 14),
+                    style: const TextStyle(color: Colors.white, fontSize: 13.5),
                     decoration: _buildInputDecoration(
                       hint: 'Enter your full name',
                       icon: Icons.person_outline_rounded,
@@ -540,7 +543,7 @@ class _ProfileCompletionDialogState
                       return null;
                     },
                   ),
-                  const SizedBox(height: 16),
+                  const SizedBox(height: 10),
 
                   // 2. Date of Birth Input
                   Row(
@@ -549,7 +552,7 @@ class _ProfileCompletionDialogState
                         'Date of Birth',
                         style: TextStyle(
                           color: Colors.white70,
-                          fontSize: 12,
+                          fontSize: 11.5,
                           fontWeight: FontWeight.w600,
                         ),
                       ),
@@ -557,25 +560,25 @@ class _ProfileCompletionDialogState
                         ' *',
                         style: TextStyle(
                           color: DpcColors.accentNegative,
-                          fontSize: 12,
+                          fontSize: 11.5,
                           fontWeight: FontWeight.bold,
                         ),
                       ),
                     ],
                   ),
-                  const SizedBox(height: 6),
+                  const SizedBox(height: 4),
                   InkWell(
                     key: const Key('profile_dob_picker_tile'),
                     onTap: _pickDateOfBirth,
-                    borderRadius: BorderRadius.circular(12),
+                    borderRadius: BorderRadius.circular(11),
                     child: Container(
                       padding: const EdgeInsets.symmetric(
-                        horizontal: 14,
-                        vertical: 12,
+                        horizontal: 12,
+                        vertical: 9,
                       ),
                       decoration: BoxDecoration(
                         color: DpcColors.bgOled,
-                        borderRadius: BorderRadius.circular(12),
+                        borderRadius: BorderRadius.circular(11),
                         border: Border.all(
                           color: _selectedDob != null
                               ? mintAccent.withValues(alpha: 0.5)
@@ -588,9 +591,9 @@ class _ProfileCompletionDialogState
                           const Icon(
                             Icons.calendar_month_outlined,
                             color: DpcColors.textSecondary,
-                            size: 18,
+                            size: 17,
                           ),
-                          const SizedBox(width: 12),
+                          const SizedBox(width: 10),
                           Expanded(
                             child: Text(
                               _selectedDob != null
@@ -600,7 +603,7 @@ class _ProfileCompletionDialogState
                                 color: _selectedDob != null
                                     ? Colors.white
                                     : DpcColors.textMuted,
-                                fontSize: 14,
+                                fontSize: 13.5,
                                 fontWeight: _selectedDob != null
                                     ? FontWeight.w600
                                     : FontWeight.normal,
@@ -610,18 +613,18 @@ class _ProfileCompletionDialogState
                           if (_selectedDob != null)
                             Container(
                               padding: const EdgeInsets.symmetric(
-                                horizontal: 8,
+                                horizontal: 7,
                                 vertical: 2,
                               ),
                               decoration: BoxDecoration(
                                 color: mintAccent.withValues(alpha: 0.12),
-                                borderRadius: BorderRadius.circular(8),
+                                borderRadius: BorderRadius.circular(6),
                               ),
                               child: Text(
                                 '${_calculateAge(_selectedDob!)} yrs',
                                 style: const TextStyle(
                                   color: mintAccent,
-                                  fontSize: 11,
+                                  fontSize: 10.5,
                                   fontWeight: FontWeight.w700,
                                 ),
                               ),
@@ -630,7 +633,7 @@ class _ProfileCompletionDialogState
                       ),
                     ),
                   ),
-                  const SizedBox(height: 16),
+                  const SizedBox(height: 10),
 
                   // 3. Gender Selection
                   Row(
@@ -639,7 +642,7 @@ class _ProfileCompletionDialogState
                         'Gender',
                         style: TextStyle(
                           color: Colors.white70,
-                          fontSize: 12,
+                          fontSize: 11.5,
                           fontWeight: FontWeight.w600,
                         ),
                       ),
@@ -647,16 +650,16 @@ class _ProfileCompletionDialogState
                         ' *',
                         style: TextStyle(
                           color: DpcColors.accentNegative,
-                          fontSize: 12,
+                          fontSize: 11.5,
                           fontWeight: FontWeight.bold,
                         ),
                       ),
                     ],
                   ),
-                  const SizedBox(height: 8),
+                  const SizedBox(height: 5),
                   Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
+                    spacing: 7,
+                    runSpacing: 7,
                     children: _genderOptions.map((option) {
                       final isSelected = _selectedGender == option;
                       return InkWell(
@@ -667,22 +670,22 @@ class _ProfileCompletionDialogState
                             _errorMessage = null;
                           });
                         },
-                        borderRadius: BorderRadius.circular(10),
+                        borderRadius: BorderRadius.circular(9),
                         child: Container(
                           padding: const EdgeInsets.symmetric(
-                            horizontal: 12,
-                            vertical: 8,
+                            horizontal: 10,
+                            vertical: 6,
                           ),
                           decoration: BoxDecoration(
                             color: isSelected
                                 ? mintAccent.withValues(alpha: 0.15)
                                 : DpcColors.bgOled,
-                            borderRadius: BorderRadius.circular(10),
+                            borderRadius: BorderRadius.circular(9),
                             border: Border.all(
                               color: isSelected
                                   ? mintAccent
                                   : DpcColors.surfaceBorder,
-                              width: 1.2,
+                              width: 1.1,
                             ),
                           ),
                           child: Text(
@@ -691,7 +694,7 @@ class _ProfileCompletionDialogState
                               color: isSelected
                                   ? mintAccent
                                   : DpcColors.textSecondary,
-                              fontSize: 12,
+                              fontSize: 11.5,
                               fontWeight: isSelected
                                   ? FontWeight.w700
                                   : FontWeight.w500,
@@ -701,9 +704,9 @@ class _ProfileCompletionDialogState
                       );
                     }).toList(),
                   ),
-                  const SizedBox(height: 20),
+                  const SizedBox(height: 12),
 
-                  // 4. Income Type / Professional Tag (Optional / Recommended)
+                  // 4. Income Type / Professional Tag (Optional)
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
@@ -711,42 +714,42 @@ class _ProfileCompletionDialogState
                         'Income & Employment Type',
                         style: TextStyle(
                           color: Colors.white70,
-                          fontSize: 12,
+                          fontSize: 11.5,
                           fontWeight: FontWeight.w600,
                         ),
                       ),
                       Container(
                         padding: const EdgeInsets.symmetric(
-                          horizontal: 6,
-                          vertical: 2,
+                          horizontal: 5,
+                          vertical: 1.5,
                         ),
                         decoration: BoxDecoration(
                           color: DpcColors.surfaceTrack,
-                          borderRadius: BorderRadius.circular(6),
+                          borderRadius: BorderRadius.circular(5),
                         ),
                         child: const Text(
                           'OPTIONAL',
                           style: TextStyle(
                             color: DpcColors.textMuted,
-                            fontSize: 9,
+                            fontSize: 8.5,
                             fontWeight: FontWeight.w700,
                           ),
                         ),
                       ),
                     ],
                   ),
-                  const SizedBox(height: 4),
+                  const SizedBox(height: 2),
                   const Text(
-                    'Calibrates cashflow rhythm and safe-to-spend estimations.',
+                    'Calibrates cashflow rhythm & safe-to-spend estimations.',
                     style: TextStyle(
                       color: DpcColors.textMuted,
-                      fontSize: 11,
+                      fontSize: 10.5,
                     ),
                   ),
-                  const SizedBox(height: 10),
+                  const SizedBox(height: 6),
                   Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
+                    spacing: 7,
+                    runSpacing: 7,
                     children: _incomeTypeOptions.map((opt) {
                       final isSelected = _selectedIncomeType == opt['id'];
                       return InkWell(
@@ -761,22 +764,22 @@ class _ProfileCompletionDialogState
                             _errorMessage = null;
                           });
                         },
-                        borderRadius: BorderRadius.circular(10),
+                        borderRadius: BorderRadius.circular(9),
                         child: Container(
                           padding: const EdgeInsets.symmetric(
-                            horizontal: 12,
-                            vertical: 8,
+                            horizontal: 10,
+                            vertical: 6,
                           ),
                           decoration: BoxDecoration(
                             color: isSelected
                                 ? mintAccent.withValues(alpha: 0.15)
                                 : DpcColors.bgOled,
-                            borderRadius: BorderRadius.circular(10),
+                            borderRadius: BorderRadius.circular(9),
                             border: Border.all(
                               color: isSelected
                                   ? mintAccent
                                   : DpcColors.surfaceBorder,
-                              width: 1.2,
+                              width: 1.1,
                             ),
                           ),
                           child: Text(
@@ -785,7 +788,7 @@ class _ProfileCompletionDialogState
                               color: isSelected
                                   ? mintAccent
                                   : DpcColors.textSecondary,
-                              fontSize: 12,
+                              fontSize: 11.5,
                               fontWeight: isSelected
                                   ? FontWeight.w700
                                   : FontWeight.w500,
@@ -795,7 +798,7 @@ class _ProfileCompletionDialogState
                       );
                     }).toList(),
                   ),
-                  const SizedBox(height: 16),
+                  const SizedBox(height: 10),
 
                   // 5. Expected Monthly Income (Optional)
                   Row(
@@ -807,57 +810,57 @@ class _ProfileCompletionDialogState
                             : 'Expected Monthly Income',
                         style: const TextStyle(
                           color: Colors.white70,
-                          fontSize: 12,
+                          fontSize: 11.5,
                           fontWeight: FontWeight.w600,
                         ),
                       ),
                       Container(
                         padding: const EdgeInsets.symmetric(
-                          horizontal: 6,
-                          vertical: 2,
+                          horizontal: 5,
+                          vertical: 1.5,
                         ),
                         decoration: BoxDecoration(
                           color: DpcColors.surfaceTrack,
-                          borderRadius: BorderRadius.circular(6),
+                          borderRadius: BorderRadius.circular(5),
                         ),
                         child: const Text(
                           'OPTIONAL',
                           style: TextStyle(
                             color: DpcColors.textMuted,
-                            fontSize: 9,
+                            fontSize: 8.5,
                             fontWeight: FontWeight.w700,
                           ),
                         ),
                       ),
                     ],
                   ),
-                  const SizedBox(height: 4),
+                  const SizedBox(height: 2),
                   Text(
                     _selectedIncomeType == 'Freelancer'
-                        ? 'Your rough monthly average, so we can plan your budget safely.'
-                        : 'Helps calculate your daily spending limit before your next paycheck arrives.',
+                        ? 'Average monthly inflow to calibrate budgeting.'
+                        : 'Helps calculate daily spending limits before payday.',
                     style: const TextStyle(
                       color: DpcColors.textMuted,
-                      fontSize: 11,
+                      fontSize: 10.5,
                     ),
                   ),
-                  const SizedBox(height: 8),
+                  const SizedBox(height: 5),
                   TextFormField(
                     key: const Key('profile_income_input'),
                     controller: _incomeController,
                     keyboardType: TextInputType.number,
-                    style: const TextStyle(color: Colors.white, fontSize: 14),
+                    style: const TextStyle(color: Colors.white, fontSize: 13.5),
                     decoration: _buildInputDecoration(
                       hint: 'e.g. 50000',
                       icon: Icons.currency_rupee_rounded,
                     ),
                   ),
-                  const SizedBox(height: 24),
+                  const SizedBox(height: 14),
 
                   // 6. Save & Continue Action Button
                   SizedBox(
                     width: double.infinity,
-                    height: 48,
+                    height: 46,
                     child: ElevatedButton(
                       key: const Key('save_profile_button'),
                       onPressed: isReady ? _handleSave : null,
@@ -872,7 +875,7 @@ class _ProfileCompletionDialogState
                         disabledForegroundColor: DpcColors.textMuted,
                         elevation: 0,
                         shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(14),
+                          borderRadius: BorderRadius.circular(12),
                           side: BorderSide(
                             color: isReady
                                 ? mintAccent
@@ -883,18 +886,19 @@ class _ProfileCompletionDialogState
                       ),
                       child: _isSaving
                           ? const SizedBox(
-                              width: 20,
-                              height: 20,
+                              width: 18,
+                              height: 18,
                               child: CircularProgressIndicator(
-                                strokeWidth: 2.5,
+                                strokeWidth: 2.2,
                                 color: Colors.black,
                               ),
                             )
                           : const Text(
                               'Save & Continue',
                               style: TextStyle(
-                                fontSize: 15,
-                                fontWeight: FontWeight.w800,
+                                fontSize: 14.5,
+                                fontWeight: FontWeight.w700,
+                                letterSpacing: -0.2,
                               ),
                             ),
                     ),

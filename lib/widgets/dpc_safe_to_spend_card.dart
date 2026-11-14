@@ -94,103 +94,128 @@ class DpcSafeToSpendCard extends ConsumerWidget {
       subline = 'for next $horizonDays days';
     }
 
-    return Container(
-      decoration: DpcDecorations.cardBase(radius: 20),
-      padding: const EdgeInsets.all(18),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Header: Status Dot, Title, and Status Badge (if status exists)
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  if (statusColor != null) ...[
-                    Container(
-                      width: 7,
-                      height: 7,
-                      decoration: BoxDecoration(
-                        color: statusColor,
-                        shape: BoxShape.circle,
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                  ],
-                  const Text(
-                    'Daily safe limit',
-                    style: TextStyle(
-                      color: DpcColors.textPrimary,
-                      fontSize: 14,
-                      fontWeight: FontWeight.w700,
-                      letterSpacing: -0.2,
-                    ),
-                  ),
-                ],
-              ),
-              if (statusLabel != null && statusColor != null)
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                  decoration: BoxDecoration(
-                    color: statusColor.withValues(alpha: 0.12),
-                    borderRadius: BorderRadius.circular(10),
-                    border: Border.all(
-                      color: statusColor.withValues(alpha: 0.3),
-                      width: 0.8,
-                    ),
-                  ),
-                  child: Text(
-                    statusLabel,
-                    style: TextStyle(
-                      color: statusColor,
-                      fontSize: 11,
-                      fontWeight: FontWeight.w700,
-                      letterSpacing: 0.2,
-                    ),
-                  ),
-                ),
-            ],
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(22),
+      child: Container(
+        decoration: BoxDecoration(
+          color: const Color(0xE6141418), // 90% Obsidian Glass
+          borderRadius: BorderRadius.circular(22),
+          border: Border.all(
+            color: const Color(0x1AFFFFFF), // 10% white hairline
+            width: 1,
           ),
-          const SizedBox(height: 12),
-
-          // Main Metric: Amount + "a day"
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.baseline,
-            textBaseline: TextBaseline.alphabetic,
-            children: [
-              Text(
-                BankTransaction.formatRupees(safePerDay),
-                style: const TextStyle(
-                  color: DpcColors.textPrimary,
-                  fontSize: 30,
-                  fontWeight: FontWeight.w800,
-                  letterSpacing: -0.8,
-                ),
-              ),
-              const SizedBox(width: 8),
-              const Text(
-                'a day',
-                style: TextStyle(
-                  color: DpcColors.textSecondary,
-                  fontSize: 14,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-            ],
-          ),
-          if (subline.isNotEmpty) ...[
-            const SizedBox(height: 4),
-            Text(
-              subline,
-              style: const TextStyle(
-                color: DpcColors.textMuted,
-                fontSize: 12,
-                fontWeight: FontWeight.w500,
-              ),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.45),
+              blurRadius: 24,
+              offset: const Offset(0, 8),
             ),
           ],
-        ],
+        ),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 20),
+          child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Header: Status Dot, Title, and Status Badge
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (statusColor != null) ...[
+                            Container(
+                              width: 8,
+                              height: 8,
+                              decoration: BoxDecoration(
+                                color: statusColor,
+                                shape: BoxShape.circle,
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: statusColor.withValues(alpha: 0.5),
+                                    blurRadius: 6,
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+                          ],
+                          const Text(
+                            'Daily safe limit',
+                            style: TextStyle(
+                              color: DpcColors.textPrimary,
+                              fontSize: 14,
+                              fontWeight: FontWeight.w700,
+                              letterSpacing: -0.2,
+                            ),
+                          ),
+                        ],
+                      ),
+                      if (statusLabel != null && statusColor != null)
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: statusColor.withValues(alpha: 0.12),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(
+                              color: statusColor.withValues(alpha: 0.28),
+                              width: 0.8,
+                            ),
+                          ),
+                          child: Text(
+                            statusLabel,
+                            style: TextStyle(
+                              color: statusColor,
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                              letterSpacing: 0.3,
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+
+                  // Main Metric: Amount + "a day"
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.baseline,
+                    textBaseline: TextBaseline.alphabetic,
+                    children: [
+                      Text(
+                        BankTransaction.formatRupees(safePerDay),
+                        style: const TextStyle(
+                          color: DpcColors.textPrimary,
+                          fontSize: 32,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: -1.0,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      const Text(
+                        'a day',
+                        style: TextStyle(
+                          color: DpcColors.textSecondary,
+                          fontSize: 14,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ],
+                  ),
+                  if (subline.isNotEmpty) ...[
+                    const SizedBox(height: 6),
+                    Text(
+                      subline,
+                      style: const TextStyle(
+                        color: DpcColors.textMuted,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
       ),
     );
   }

@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../config/supabase_config.dart';
+import '../models/reminder_model.dart';
 import '../services/supabase_db_service.dart';
 import 'auth_providers.dart';
 import 'transaction_providers.dart';
@@ -61,6 +62,15 @@ final balanceProvider = FutureProvider<Map<String, dynamic>?>((ref) async {
   if (user == null) return null;
   ref.watch(transactionFeedProvider);
   final dbService = ref.watch(supabaseDbServiceProvider);
-  return dbService.fetchCurrentBalance();
+  return dbService.fetchCurrentBalance(user.id);
 });
+
+/// Riverpod provider for fetching user reminders detected by the serverless ML pipeline
+final remindersProvider = FutureProvider<List<ReminderModel>>((ref) async {
+  final user = ref.watch(currentUserProvider);
+  if (user == null) return [];
+  final dbService = ref.watch(supabaseDbServiceProvider);
+  return dbService.fetchReminders(userId: user.id);
+});
+
 

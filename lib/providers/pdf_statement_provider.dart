@@ -2,6 +2,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../models/transaction_model.dart';
 import '../services/pdf_statement_parser_service.dart';
 import 'auth_providers.dart';
 import 'supabase_provider.dart';
@@ -46,6 +47,7 @@ class PdfStatementImportState {
   final bool isPasswordProtected;
   final Uint8List? pendingBytes;
   final String? pendingFileName;
+  final String? pendingStoragePath;
 
   const PdfStatementImportState({
     this.isProcessing = false,
@@ -55,6 +57,7 @@ class PdfStatementImportState {
     this.isPasswordProtected = false,
     this.pendingBytes,
     this.pendingFileName,
+    this.pendingStoragePath,
   });
 
   PdfStatementImportState copyWith({
@@ -65,6 +68,7 @@ class PdfStatementImportState {
     bool? isPasswordProtected,
     Uint8List? pendingBytes,
     String? pendingFileName,
+    String? pendingStoragePath,
   }) {
     return PdfStatementImportState(
       isProcessing: isProcessing ?? this.isProcessing,
@@ -74,6 +78,7 @@ class PdfStatementImportState {
       isPasswordProtected: isPasswordProtected ?? this.isPasswordProtected,
       pendingBytes: pendingBytes ?? this.pendingBytes,
       pendingFileName: pendingFileName ?? this.pendingFileName,
+      pendingStoragePath: pendingStoragePath ?? this.pendingStoragePath,
     );
   }
 }
@@ -89,8 +94,8 @@ class PdfStatementImportNotifier extends Notifier<PdfStatementImportState> {
     return const PdfStatementImportState();
   }
 
-  /// Prompts the user to pick a PDF statement file, parses the transactions,
-  /// and writes the Supabase-compliant CSV file to the root directory.
+  /// Prompts the user to pick a PDF statement file, uploads it to Supabase Storage,
+  /// and runs the Financial Statement Intelligence API via Supabase Edge Function.
   Future<PdfStatementParseResult?> pickAndParsePdf() async {
     state = state.copyWith(
       isProcessing: true,
@@ -142,71 +147,77 @@ class PdfStatementImportNotifier extends Notifier<PdfStatementImportState> {
         return null;
       }
 
+      final user = ref.read(currentUserProvider);
+      final dbService = ref.read(supabaseDbServiceProvider);
+
+      if (user == null) {
+        state = state.copyWith(
+          isProcessing: false,
+          errorMessage: 'Please sign in to upload statements.',
+        );
+        return null;
+      }
+
       state = state.copyWith(
         isProcessing: true,
-        statusMessage: 'Reading statement from ${pickedFile.name}...',
+        statusMessage: 'Uploading ${pickedFile.name} to secure vault...',
       );
 
-      final user = ref.read(currentUserProvider);
-      final parserService = ref.read(pdfStatementParserServiceProvider);
-
-      final parseResult = await parserService.parsePdfAndExportCsv(
+      final storagePath = await dbService.uploadStatementPdfToStorage(
+        userId: user.id,
+        filename: pickedFile.name,
         pdfBytes: fileBytes,
-        fileName: pickedFile.name,
-        userId: user?.id,
       );
 
-      if (parseResult.isPasswordProtected) {
+      if (storagePath == null) {
         state = state.copyWith(
           isProcessing: false,
-          isPasswordProtected: true,
-          pendingBytes: fileBytes,
-          pendingFileName: pickedFile.name,
-          errorMessage: null,
-          result: parseResult,
+          errorMessage: 'Could not upload statement PDF to storage vault.',
         );
-        return parseResult;
+        return null;
       }
 
-      ref.read(lastParsedPdfResultProvider.notifier).setResult(parseResult);
+      state = state.copyWith(
+        isProcessing: true,
+        statusMessage: 'Analyzing statement layout & OCR with Setthi AI... (~15s)',
+        pendingBytes: fileBytes,
+        pendingFileName: pickedFile.name,
+        pendingStoragePath: storagePath,
+      );
 
-      if (parseResult.success) {
-        state = state.copyWith(
-          isProcessing: true,
-          statusMessage: 'Adding ${parseResult.totalCount} transactions to your feed...',
+      try {
+        final backendResult = await dbService.processStatementViaBackend(
+          storagePath: storagePath,
+          filename: pickedFile.name,
         );
 
-        final dbService = ref.read(supabaseDbServiceProvider);
-        final saved = await dbService.saveBankTransactions(
-          transactions: parseResult.transactions,
-          userId: user?.id,
+        return await _handleBackendStatementResponse(
+          response: backendResult,
           fileName: pickedFile.name,
+          storagePath: storagePath,
+          fileBytes: fileBytes,
         );
-
-        // Refresh transaction feed, telemetry metrics, cash flow rhythms, and habit profile across the app
-        ref.invalidate(transactionFeedProvider);
-        ref.invalidate(balanceProvider);
-        ref.invalidate(telemetryMetricsProvider);
-        ref.invalidate(cashflowRhythmProvider);
-        ref.invalidate(recurringCommitmentsProvider);
-        ref.invalidate(habitProfileProvider);
-
-        state = state.copyWith(
-          isProcessing: false,
-          statusMessage: saved
-              ? 'Successfully added ${parseResult.totalCount} transactions.'
-              : 'Extracted ${parseResult.totalCount} transactions.',
-          result: parseResult,
-        );
-      } else {
-        state = state.copyWith(
-          isProcessing: false,
-          errorMessage: parseResult.errorMessage ?? 'Failed to extract transactions.',
-          result: parseResult,
-        );
+      } catch (backendErr) {
+        debugPrint('[PdfStatementImportNotifier] Backend statement error: $backendErr');
+        if (backendErr.toString().toLowerCase().contains('password')) {
+          final parseResult = PdfStatementParseResult(
+            success: false,
+            isPasswordProtected: true,
+            fileName: pickedFile.name,
+            errorMessage: 'This PDF statement is password-protected.',
+          );
+          state = state.copyWith(
+            isProcessing: false,
+            isPasswordProtected: true,
+            pendingBytes: fileBytes,
+            pendingFileName: pickedFile.name,
+            pendingStoragePath: storagePath,
+            result: parseResult,
+          );
+          return parseResult;
+        }
+        rethrow;
       }
-
-      return parseResult;
     } catch (e) {
       debugPrint('[PdfStatementImportNotifier] Error: $e');
       final errorResult = PdfStatementParseResult(
@@ -222,98 +233,225 @@ class PdfStatementImportNotifier extends Notifier<PdfStatementImportState> {
     }
   }
 
-  /// Unlocks a password-protected PDF statement in memory and imports transactions
+  /// Unlocks a password-protected PDF statement via backend and imports transactions
   Future<PdfStatementParseResult?> unlockWithPassword(String password) async {
     final pendingBytes = state.pendingBytes;
     final pendingName = state.pendingFileName;
+    final pendingPath = state.pendingStoragePath;
     if (pendingBytes == null) return null;
+
+    final user = ref.read(currentUserProvider);
+    final dbService = ref.read(supabaseDbServiceProvider);
 
     state = state.copyWith(
       isProcessing: true,
-      statusMessage: 'Unlocking statement...',
+      statusMessage: 'Unlocking statement and analyzing with Setthi AI... (~15s)',
       errorMessage: null,
     );
 
     try {
-      final user = ref.read(currentUserProvider);
-      final parserService = ref.read(pdfStatementParserServiceProvider);
+      String? storagePath = pendingPath;
+      if (storagePath == null && user != null && pendingName != null) {
+        storagePath = await dbService.uploadStatementPdfToStorage(
+          userId: user.id,
+          filename: pendingName,
+          pdfBytes: pendingBytes,
+        );
+      }
 
-      final parseResult = await parserService.parsePdfAndExportCsv(
-        pdfBytes: pendingBytes,
-        fileName: pendingName,
-        userId: user?.id,
+      if (storagePath == null) {
+        throw Exception('Could not locate uploaded statement path.');
+      }
+
+      final response = await dbService.processStatementViaBackend(
+        storagePath: storagePath,
+        filename: pendingName,
         password: password,
       );
 
-      if (parseResult.isPasswordProtected) {
-        state = state.copyWith(
-          isProcessing: false,
-          isPasswordProtected: true,
-          errorMessage: 'Incorrect password. Please try again.',
-          result: parseResult,
-        );
-        return parseResult;
-      }
-
-      ref.read(lastParsedPdfResultProvider.notifier).setResult(parseResult);
-
-      if (parseResult.success) {
-        state = state.copyWith(
-          isProcessing: true,
-          statusMessage: 'Adding ${parseResult.totalCount} transactions to your feed...',
-        );
-
-        final dbService = ref.read(supabaseDbServiceProvider);
-        final saved = await dbService.saveBankTransactions(
-          transactions: parseResult.transactions,
-          userId: user?.id,
-          fileName: pendingName,
-        );
-
-        ref.invalidate(transactionFeedProvider);
-        ref.invalidate(balanceProvider);
-        ref.invalidate(telemetryMetricsProvider);
-        ref.invalidate(cashflowRhythmProvider);
-        ref.invalidate(recurringCommitmentsProvider);
-        ref.invalidate(habitProfileProvider);
-
-        state = state.copyWith(
-          isProcessing: false,
-          isPasswordProtected: false,
-          pendingBytes: null,
-          pendingFileName: null,
-          statusMessage: saved
-              ? 'Successfully added ${parseResult.totalCount} transactions.'
-              : 'Extracted ${parseResult.totalCount} transactions.',
-          result: parseResult,
-        );
-      } else {
-        state = state.copyWith(
-          isProcessing: false,
-          isPasswordProtected: false,
-          pendingBytes: null,
-          pendingFileName: null,
-          errorMessage: parseResult.errorMessage ?? 'Failed to extract transactions.',
-          result: parseResult,
-        );
-      }
-
-      return parseResult;
+      return await _handleBackendStatementResponse(
+        response: response,
+        fileName: pendingName ?? 'statement.pdf',
+        storagePath: storagePath,
+        fileBytes: pendingBytes,
+      );
     } catch (e) {
-      debugPrint('[PdfStatementImportNotifier] Error unlocking: $e');
+      debugPrint('[PdfStatementImportNotifier] Unlock error: $e');
+      final isWrongPassword = e.toString().toLowerCase().contains('password');
       final errorResult = PdfStatementParseResult(
         success: false,
-        isPasswordProtected: true,
-        errorMessage: 'Incorrect password or unreadable document. Please try again.',
+        isPasswordProtected: isWrongPassword,
+        errorMessage: isWrongPassword
+            ? 'Incorrect password. Please try again.'
+            : 'Error processing statement: $e',
       );
       state = state.copyWith(
         isProcessing: false,
-        isPasswordProtected: true,
-        errorMessage: 'Incorrect password or unreadable document. Please try again.',
+        isPasswordProtected: isWrongPassword,
+        errorMessage: errorResult.errorMessage,
         result: errorResult,
       );
       return errorResult;
     }
+  }
+
+  Future<PdfStatementParseResult?> _handleBackendStatementResponse({
+    required Map<String, dynamic> response,
+    required String fileName,
+    required String storagePath,
+    required Uint8List fileBytes,
+  }) async {
+    final status = response['status']?.toString();
+
+    if (status == 'password_required') {
+      final parseResult = PdfStatementParseResult(
+        success: false,
+        isPasswordProtected: true,
+        fileName: fileName,
+        errorMessage: 'This PDF statement is password-protected.',
+      );
+      state = state.copyWith(
+        isProcessing: false,
+        isPasswordProtected: true,
+        pendingBytes: fileBytes,
+        pendingFileName: fileName,
+        pendingStoragePath: storagePath,
+        errorMessage: null,
+        result: parseResult,
+      );
+      return parseResult;
+    }
+
+    if (status == 'completed') {
+      final rawResult = response['raw_result'] as Map<String, dynamic>?;
+      final dbPayload = rawResult?['database_payload'] as Map<String, dynamic>?;
+      final bankRows = (dbPayload?['bank_transactions'] as List?) ?? [];
+      final cardRows = (dbPayload?['credit_card_transactions'] as List?) ?? [];
+
+      final txns = <BankTransaction>[];
+      int debitCount = 0;
+      int creditCount = 0;
+      double totalDebit = 0.0;
+      double totalCredit = 0.0;
+
+      for (final r in bankRows) {
+        if (r is! Map) continue;
+        final isDebit = r['type']?.toString().toUpperCase() == 'DEBIT';
+        final amt = double.tryParse(r['amount']?.toString() ?? '0') ?? 0.0;
+        final bal = double.tryParse(r['current_balance']?.toString() ?? '0') ?? 0.0;
+        final timestamp = DateTime.tryParse(r['transaction_timestamp']?.toString() ?? '') ?? DateTime.now();
+
+        if (isDebit) {
+          debitCount++;
+          totalDebit += amt;
+        } else {
+          creditCount++;
+          totalCredit += amt;
+        }
+
+        txns.add(BankTransaction(
+          txnId: r['txn_id']?.toString() ?? PdfStatementParserService.generateUuidV4(),
+          type: isDebit ? TransactionType.debit : TransactionType.credit,
+          mode: r['mode']?.toString() ?? 'UPI',
+          amount: amt,
+          currentBalance: bal,
+          transactionTimestamp: timestamp,
+          narration: r['narration']?.toString() ?? '',
+          precomputedMerchantName: r['clean_merchant_name']?.toString() ?? r['narration']?.toString(),
+          category: r['category']?.toString(),
+        ));
+      }
+
+      for (final r in cardRows) {
+        if (r is! Map) continue;
+        final isDebit = r['transaction_type']?.toString().toUpperCase() == 'DEBIT';
+        final amt = double.tryParse(r['amount']?.toString() ?? '0') ?? 0.0;
+        final timestamp = DateTime.tryParse(r['transaction_date']?.toString() ?? '') ?? DateTime.now();
+
+        if (isDebit) {
+          debitCount++;
+          totalDebit += amt;
+        } else {
+          creditCount++;
+          totalCredit += amt;
+        }
+
+        txns.add(BankTransaction(
+          txnId: r['reference_id']?.toString() ?? PdfStatementParserService.generateUuidV4(),
+          type: isDebit ? TransactionType.debit : TransactionType.credit,
+          mode: r['payment_mode']?.toString() ?? 'CARD',
+          amount: amt,
+          currentBalance: 0.0,
+          transactionTimestamp: timestamp,
+          narration: r['merchant_name']?.toString() ?? '',
+          precomputedMerchantName: r['clean_merchant_name']?.toString() ?? r['merchant_name']?.toString(),
+          category: r['category']?.toString(),
+        ));
+      }
+
+      // If in-memory txns are empty, fall back to querying the database directly
+      if (txns.isEmpty) {
+        try {
+          final dbService = ref.read(supabaseDbServiceProvider);
+          final fetched = await dbService.fetchStoredTransactions(limit: 250);
+          if (fetched.isNotEmpty) {
+            txns.addAll(fetched);
+            debitCount = txns.where((t) => t.isDebit).length;
+            creditCount = txns.where((t) => t.isCredit).length;
+            totalDebit = txns.where((t) => t.isDebit).fold(0.0, (s, t) => s + t.amount);
+            totalCredit = txns.where((t) => t.isCredit).fold(0.0, (s, t) => s + t.amount);
+          }
+        } catch (_) {}
+      }
+
+      final totalCount = (response['total_transactions'] as num?)?.toInt() ?? txns.length;
+      final parseResult = PdfStatementParseResult(
+        success: true,
+        fileName: fileName,
+        totalCount: totalCount,
+        debitCount: debitCount,
+        creditCount: creditCount,
+        totalDebitAmount: totalDebit,
+        totalCreditAmount: totalCredit,
+        latestBalance: (response['closing_balance'] as num?)?.toDouble() ?? 0.0,
+        transactions: txns,
+      );
+
+      ref.read(lastParsedPdfResultProvider.notifier).setResult(parseResult);
+
+      // Invalidate app-wide feeds and balances so the UI immediately reflects new data
+      ref.invalidate(transactionFeedProvider);
+      ref.invalidate(balanceProvider);
+      ref.invalidate(telemetryMetricsProvider);
+      ref.invalidate(cashflowRhythmProvider);
+      ref.invalidate(recurringCommitmentsProvider);
+      ref.invalidate(habitProfileProvider);
+
+      final issuer = response['issuer_or_bank'] ?? 'statement';
+      state = state.copyWith(
+        isProcessing: false,
+        isPasswordProtected: false,
+        pendingBytes: null,
+        pendingFileName: null,
+        pendingStoragePath: null,
+        statusMessage: 'Successfully added $totalCount transactions from $issuer.',
+        result: parseResult,
+      );
+      return parseResult;
+    }
+
+    final errMsg = response['message']?.toString() ?? response['error']?.toString() ?? 'Failed to extract statement';
+    final parseResult = PdfStatementParseResult(
+      success: false,
+      fileName: fileName,
+      errorMessage: errMsg,
+    );
+    state = state.copyWith(
+      isProcessing: false,
+      errorMessage: errMsg,
+      result: parseResult,
+    );
+    return parseResult;
   }
 
   /// Clears any transient error message

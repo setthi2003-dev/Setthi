@@ -24,15 +24,15 @@ class SetthiOnboardingFlow extends ConsumerStatefulWidget {
   const SetthiOnboardingFlow({
     super.key,
     this.onComplete,
-    this.initialPage = 1,
+    this.initialPage = 0,
   });
 
   static Future<void> show(
     BuildContext context, {
     VoidCallback? onComplete,
-    int initialPage = 1,
-  }) {
-    return showModalBottomSheet(
+    int initialPage = 0,
+  }) async {
+    await showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
@@ -42,6 +42,7 @@ class SetthiOnboardingFlow extends ConsumerStatefulWidget {
         initialPage: initialPage,
       ),
     );
+    onComplete?.call();
   }
 
   @override
@@ -61,7 +62,12 @@ class _SetthiOnboardingFlowState extends ConsumerState<SetthiOnboardingFlow> {
   bool _isConfirmingPayday = false;
   PdfStatementParseResult? _cachedParseResult;
   final TextEditingController _pdfPasswordController = TextEditingController();
+  late final TextEditingController _monthlyIncomeController;
   bool _showPdfPassword = false;
+  bool _isSalaryConfidenceLow = false;
+  String? _incomeDetectionNotice;
+  int _statementDaysSpan = 0;
+  double _statementTotalCredits = 0.0;
 
   @override
   void initState() {
@@ -69,6 +75,7 @@ class _SetthiOnboardingFlowState extends ConsumerState<SetthiOnboardingFlow> {
     _currentPage = widget.initialPage;
     _pageController = PageController(initialPage: widget.initialPage);
     _cachedParseResult = null;
+    _monthlyIncomeController = TextEditingController(text: '50000');
     Future.microtask(() {
       if (mounted) {
         ref.read(pdfStatementImportProvider.notifier).reset();
@@ -80,6 +87,7 @@ class _SetthiOnboardingFlowState extends ConsumerState<SetthiOnboardingFlow> {
   void dispose() {
     _pageController.dispose();
     _pdfPasswordController.dispose();
+    _monthlyIncomeController.dispose();
     super.dispose();
   }
 
@@ -119,10 +127,21 @@ class _SetthiOnboardingFlowState extends ConsumerState<SetthiOnboardingFlow> {
 
   /// Automatically calibrates the user's primary income / allowance cadence from parsed transactions
   void _calibratePaydayFromTransactions(List<BankTransaction> transactions) {
-    if (transactions.isEmpty) return;
+    if (transactions.isEmpty) {
+      setState(() {
+        _isSalaryConfidenceLow = true;
+        _incomeDetectionNotice =
+            'No transactions found in this statement. Please enter your expected monthly income below.';
+      });
+      return;
+    }
 
     final credits = transactions.where((t) => t.isCredit).toList();
-    if (credits.isEmpty) return;
+    final dates = transactions.map((t) => t.transactionTimestamp).toList()..sort();
+    final earliest = dates.first;
+    final latest = dates.last;
+    final daysSpan = latest.difference(earliest).inDays + 1;
+    final totalCredits = credits.fold<double>(0.0, (sum, t) => sum + t.amount);
 
     final salaryKeywords = [
       'SALARY',
@@ -148,26 +167,104 @@ class _SetthiOnboardingFlowState extends ConsumerState<SetthiOnboardingFlow> {
       }
     }
 
-    // 2. Fallback to highest monthly deposit (typical for salaried or allowance accounts)
-    if (detectedTxn == null) {
-      credits.sort((a, b) => b.amount.compareTo(a.amount));
-      if (credits.first.amount >= 5000) {
-        detectedTxn = credits.first;
+    // 2. Check for recurring monthly transfer pattern from the same counterparty / sender
+    bool isRecurringAllowance = false;
+    BankTransaction? recurringTxn;
+    String? recurringSender;
+
+    if (!isExplicitSalary && credits.length >= 2) {
+      final Map<String, List<BankTransaction>> bySender = {};
+      for (final t in credits) {
+        final key = t.cleanMerchantName.trim().isNotEmpty && t.cleanMerchantName.trim() != 'Transaction'
+            ? t.cleanMerchantName.trim().toUpperCase()
+            : t.narration.trim().toUpperCase();
+        bySender.putIfAbsent(key, () => []).add(t);
+      }
+
+      for (final entry in bySender.entries) {
+        final senderTxns = entry.value;
+        if (senderTxns.length < 2) continue;
+
+        senderTxns.sort((a, b) => b.amount.compareTo(a.amount));
+        for (final baseTxn in senderTxns) {
+          if (baseTxn.amount < 1000) continue;
+
+          final similarAmtTxns = senderTxns.where((t) {
+            final diff = (t.amount - baseTxn.amount).abs();
+            return diff / baseTxn.amount <= 0.15;
+          }).toList();
+
+          final distinctMonths = similarAmtTxns
+              .map((t) => t.transactionTimestamp.year * 12 + t.transactionTimestamp.month)
+              .toSet();
+
+          if (distinctMonths.length >= 2) {
+            isRecurringAllowance = true;
+            recurringTxn = baseTxn;
+            recurringSender = entry.key;
+            break;
+          }
+        }
+        if (isRecurringAllowance) break;
       }
     }
 
-    if (detectedTxn != null) {
-      final rawName = detectedTxn.cleanMerchantName.trim();
-      final hasMeaningfulName = rawName.isNotEmpty && rawName != 'Transaction';
+    // 3. Assess confidence: short date span (< 25 days) or lack of regular payroll/allowance cadence
+    final isConfident = isExplicitSalary || isRecurringAllowance;
+    final isShortHistory = daysSpan < 25;
+    final isConfidenceLow = !isConfident || (isShortHistory && !isExplicitSalary);
 
-      setState(() {
-        _selectedPayday = detectedTxn!.transactionTimestamp.day.clamp(1, 31);
-        _selectedSalaryAmount = detectedTxn.amount;
-        _detectedSalaryAutomatically = true;
-        _selectedIncomeType = isExplicitSalary ? 'Salaried' : 'Allowance';
-        _detectedEmployerOrNarration = hasMeaningfulName ? rawName : null;
-      });
+    String? notice;
+    double suggestedAmount = 0.0;
+    String detectedType = 'Salaried';
+
+    if (credits.isEmpty) {
+      notice =
+          'No deposit or credit transactions found in this statement ($daysSpan days). Please enter your expected monthly income below.';
+      suggestedAmount = 25000.0;
+      detectedType = 'Allowance';
+    } else if (isExplicitSalary && detectedTxn != null) {
+      notice =
+          'Detected regular salary from ${detectedTxn.cleanMerchantName.isNotEmpty ? detectedTxn.cleanMerchantName : detectedTxn.narration} on the ${_getOrdinal(detectedTxn.transactionTimestamp.day)}.';
+      suggestedAmount = detectedTxn.amount;
+      detectedType = 'Salaried';
+    } else if (isRecurringAllowance && recurringTxn != null) {
+      detectedTxn = recurringTxn;
+      suggestedAmount = recurringTxn.amount;
+      detectedType = 'Allowance';
+      final cleanSender = recurringSender ?? detectedTxn.cleanMerchantName;
+      notice =
+          'Detected recurring monthly allowance of ${BankTransaction.formatRupees(recurringTxn.amount, showDecimals: false)} around the ${_getOrdinal(recurringTxn.transactionTimestamp.day)} from $cleanSender.';
+    } else {
+      credits.sort((a, b) => b.amount.compareTo(a.amount));
+      detectedTxn = credits.first;
+      suggestedAmount = detectedTxn.amount;
+      detectedType = 'Allowance';
+
+      if (isShortHistory) {
+        notice =
+            'This statement covers only $daysSpan days (₹${BankTransaction.formatRupees(totalCredits, showDecimals: false)} total deposits). There isn’t enough transaction history to predict your monthly income. Please confirm or enter your actual monthly figure below.';
+      } else {
+        notice =
+            'Found deposits up to ${BankTransaction.formatRupees(detectedTxn.amount)}, but couldn’t identify a regular recurring cadence. Please confirm your monthly amount below.';
+      }
     }
+
+    final rawName = recurringSender ?? detectedTxn?.cleanMerchantName.trim() ?? '';
+    final hasMeaningfulName = rawName.isNotEmpty && rawName != 'Transaction';
+
+    setState(() {
+      _statementDaysSpan = daysSpan;
+      _statementTotalCredits = totalCredits;
+      _isSalaryConfidenceLow = isConfidenceLow;
+      _incomeDetectionNotice = notice;
+      _selectedPayday = detectedTxn != null ? detectedTxn.transactionTimestamp.day.clamp(1, 31) : 28;
+      _selectedSalaryAmount = suggestedAmount > 0 ? suggestedAmount : 50000.0;
+      _monthlyIncomeController.text = _selectedSalaryAmount > 0 ? _selectedSalaryAmount.toStringAsFixed(0) : '';
+      _detectedSalaryAutomatically = !isConfidenceLow;
+      _selectedIncomeType = detectedType;
+      _detectedEmployerOrNarration = hasMeaningfulName ? rawName : null;
+    });
   }
 
   /// Cleo-style customized icebreaker data generated based on parsed transactions and archetype
@@ -250,6 +347,21 @@ class _SetthiOnboardingFlowState extends ConsumerState<SetthiOnboardingFlow> {
 
   /// Confirms payday / allowance baseline and finishes onboarding flow
   Future<void> _handleConfirmPayday() async {
+    // Read parsed income from text controller
+    final rawIncomeText = _monthlyIncomeController.text.replaceAll(',', '').replaceAll('₹', '').trim();
+    final parsedIncome = double.tryParse(rawIncomeText) ?? _selectedSalaryAmount;
+    if (parsedIncome <= 0) {
+      HapticFeedback.mediumImpact();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Please enter a valid monthly income greater than 0.'),
+          backgroundColor: DpcColors.accentNegative,
+        ),
+      );
+      return;
+    }
+    _selectedSalaryAmount = parsedIncome;
+
     setState(() => _isConfirmingPayday = true);
     HapticFeedback.mediumImpact();
 
@@ -306,6 +418,9 @@ class _SetthiOnboardingFlowState extends ConsumerState<SetthiOnboardingFlow> {
 
       ref.read(setthiIcebreakerProvider.notifier).setIcebreaker(icebreakerData);
       ref.read(chatMessagesProvider.notifier).seedIcebreakerMessage(icebreakerData.greeting);
+
+      // Explicitly switch bottom nav to 0 (Setthi AI Chat UI) as default
+      ref.read(bottomNavIndexProvider.notifier).setIndex(0);
 
       if (mounted) {
         Navigator.of(context).pop();
@@ -434,7 +549,11 @@ class _SetthiOnboardingFlowState extends ConsumerState<SetthiOnboardingFlow> {
               ),
               const Spacer(),
               IconButton(
-                onPressed: () => Navigator.of(context).pop(),
+                onPressed: () {
+                  ref.read(bottomNavIndexProvider.notifier).setIndex(0);
+                  Navigator.of(context).pop();
+                  widget.onComplete?.call();
+                },
                 icon: const Icon(Icons.close_rounded, size: 20),
                 color: DpcColors.textMuted,
                 padding: EdgeInsets.zero,
@@ -1275,6 +1394,65 @@ class _SetthiOnboardingFlowState extends ConsumerState<SetthiOnboardingFlow> {
           ),
           const SizedBox(height: 16),
 
+          // Smart Analysis Transparency Notice
+          if (_incomeDetectionNotice != null) ...[
+            Container(
+              margin: const EdgeInsets.only(bottom: 16),
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: _isSalaryConfidenceLow
+                    ? const Color(0xFF241A04)
+                    : const Color(0xFF042416),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(
+                  color: _isSalaryConfidenceLow
+                      ? const Color(0xFFFFB300).withValues(alpha: 0.4)
+                      : DpcColors.accentPositive.withValues(alpha: 0.4),
+                  width: 1.2,
+                ),
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(
+                    _isSalaryConfidenceLow
+                        ? Icons.info_outline_rounded
+                        : Icons.auto_awesome_rounded,
+                    color: _isSalaryConfidenceLow ? const Color(0xFFFFB300) : DpcColors.accentPositive,
+                    size: 18,
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          _isSalaryConfidenceLow
+                              ? 'Limited Statement History'
+                              : 'Statement Cadence Detected',
+                          style: TextStyle(
+                            color: _isSalaryConfidenceLow ? const Color(0xFFFFB300) : DpcColors.accentPositive,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        const SizedBox(height: 3),
+                        Text(
+                          _incomeDetectionNotice!,
+                          style: const TextStyle(
+                            color: DpcColors.textSecondary,
+                            fontSize: 11.5,
+                            height: 1.35,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+
           // Income Type Selector
           const Text(
             'INCOME TYPE',
@@ -1294,6 +1472,142 @@ class _SetthiOnboardingFlowState extends ConsumerState<SetthiOnboardingFlow> {
               const SizedBox(width: 8),
               _buildIncomeTypeChoiceChip('Freelancer', 'Flexible'),
             ],
+          ),
+          const SizedBox(height: 16),
+
+          // Monthly Inflow Amount Input Card
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(18),
+            decoration: BoxDecoration(
+              color: DpcColors.surfaceElevated,
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: DpcColors.surfaceBorder, width: 1.5),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      _selectedIncomeType == 'Allowance'
+                          ? 'MONTHLY ALLOWANCE'
+                          : (_selectedIncomeType == 'Freelancer' ? 'MONTHLY EARNINGS' : 'MONTHLY SALARY'),
+                      style: const TextStyle(
+                        color: DpcColors.textMuted,
+                        fontSize: 10.5,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 0.8,
+                      ),
+                    ),
+                    if (_statementTotalCredits > 0)
+                      Text(
+                        '${_statementDaysSpan > 0 ? '${_statementDaysSpan}d ' : ''}Inflow: ₹${BankTransaction.formatRupees(_statementTotalCredits, showDecimals: false)}',
+                        style: const TextStyle(
+                          color: DpcColors.accentPositive,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: DpcColors.surfaceDark,
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: DpcColors.surfaceBorder),
+                  ),
+                  child: Row(
+                    children: [
+                      const Text(
+                        '₹',
+                        style: TextStyle(
+                          color: DpcColors.accentPositive,
+                          fontSize: 26,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: TextField(
+                          controller: _monthlyIncomeController,
+                          keyboardType: TextInputType.number,
+                          style: const TextStyle(
+                            color: DpcColors.textPrimary,
+                            fontSize: 26,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: -0.5,
+                          ),
+                          decoration: const InputDecoration(
+                            border: InputBorder.none,
+                            hintText: '0',
+                            hintStyle: TextStyle(
+                              color: DpcColors.textMuted,
+                              fontSize: 26,
+                            ),
+                            contentPadding: EdgeInsets.zero,
+                          ),
+                          onChanged: (val) {
+                            final clean = val.replaceAll(',', '').replaceAll('₹', '').trim();
+                            final parsed = double.tryParse(clean) ?? 0.0;
+                            setState(() => _selectedSalaryAmount = parsed);
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 12),
+                SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    children: [10000, 15000, 25000, 50000, 75000, 100000].map((amt) {
+                      final isSelected = (_selectedSalaryAmount - amt).abs() < 1;
+                      return Padding(
+                        padding: const EdgeInsets.only(right: 6),
+                        child: InkWell(
+                          onTap: () {
+                            HapticFeedback.selectionClick();
+                            setState(() {
+                              _selectedSalaryAmount = amt.toDouble();
+                              _monthlyIncomeController.text = amt.toString();
+                            });
+                          },
+                          borderRadius: BorderRadius.circular(10),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                            decoration: BoxDecoration(
+                              color: isSelected
+                                  ? DpcColors.accentPositive.withValues(alpha: 0.15)
+                                  : DpcColors.surfaceDark,
+                              borderRadius: BorderRadius.circular(10),
+                              border: Border.all(
+                                color: isSelected
+                                    ? DpcColors.accentPositive
+                                    : DpcColors.surfaceBorder,
+                              ),
+                            ),
+                            child: Text(
+                              '₹${amt >= 100000 ? '${(amt / 100000).toStringAsFixed(0)}L' : '${(amt / 1000).toStringAsFixed(0)}k'}',
+                              style: TextStyle(
+                                color: isSelected
+                                    ? DpcColors.accentPositive
+                                    : DpcColors.textSecondary,
+                                fontSize: 11,
+                                fontWeight: isSelected ? FontWeight.w800 : FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                        ),
+                      );
+                    }).toList(),
+                  ),
+                ),
+              ],
+            ),
           ),
           const SizedBox(height: 16),
 

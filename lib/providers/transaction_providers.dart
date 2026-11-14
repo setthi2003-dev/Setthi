@@ -221,6 +221,9 @@ class TransactionFeedNotifier extends AsyncNotifier<List<BankTransaction>> {
 
     // 1. Fetch total count of stored transactions for pagination metadata
     try {
+      if (user != null) {
+        await dbService.cleanupOrphanedBankTransactions(user.id);
+      }
       _totalCount = await dbService.countStoredTransactions(user?.id);
     } catch (_) {}
 
@@ -716,3 +719,22 @@ final homeTelemetry7dProvider = FutureProvider<Map<String, dynamic>?>((ref) asyn
   final dbService = ref.watch(supabaseDbServiceProvider);
   return await dbService.fetchTelemetryMetrics(period: '7d');
 });
+
+/// Active tab index in bottom navigation dock:
+/// 0: Setthi AI
+/// 1: Telemetry / Spending Insights
+/// 2: Transactions
+/// 3: Gmail Sync
+/// 4: Profile
+final bottomNavIndexProvider =
+    NotifierProvider<BottomNavIndexNotifier, int>(BottomNavIndexNotifier.new);
+
+class BottomNavIndexNotifier extends Notifier<int> {
+  @override
+  int build() => 0;
+
+  void setIndex(int index) {
+    state = index;
+  }
+}
+

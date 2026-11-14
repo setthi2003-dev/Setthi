@@ -270,6 +270,64 @@ const geminiTools = [
           properties: {},
         },
       },
+      {
+        name: "get_credit_card_summary",
+        description:
+          "Fetches active credit card statements, due dates, minimum amount due, total amount due, statement period, and card issuer auto-detected from emails or uploaded credit card statements. Call this whenever the user asks about credit card bills, card dues, payment deadlines, or credit card balances.",
+        parameters: {
+          type: "OBJECT",
+          properties: {
+            card_last4: {
+              type: "STRING",
+              description: "Optional last 4 digits of credit card to filter",
+            },
+          },
+        },
+      },
+      {
+        name: "list_subscriptions",
+        description:
+          "Fetches recurring active subscriptions and memberships (e.g. Netflix, Spotify, YouTube Premium, Apple, ChatGPT, Claude, Amazon Prime, etc.) auto-detected from Gmail and emails. Returns service name, expected monthly/annual amount, billing date, and frequency. Call this whenever the user asks about subscriptions, streaming services, memberships, or recurring tools.",
+        parameters: {
+          type: "OBJECT",
+          properties: {
+            service_name: {
+              type: "STRING",
+              description: "Optional subscription service name or keyword to filter (e.g. 'Netflix')",
+            },
+          },
+        },
+      },
+      {
+        name: "list_credit_card_transactions",
+        description:
+          "Fetches itemized transactions from credit card statements (e.g. Slice Credit Card, HDFC Credit Card). Returns date, merchant name, amount, category, and transaction type (DEBIT/CREDIT/SPEND/REFUND). Call this whenever the user asks about credit card spending, card transactions, purchases made on their credit card, or specific merchants on their card.",
+        parameters: {
+          type: "OBJECT",
+          properties: {
+            merchant: {
+              type: "STRING",
+              description: "Optional merchant name or keyword to filter (e.g. 'Zomato', 'Amazon')",
+            },
+            category: {
+              type: "STRING",
+              description: "Optional category filter",
+            },
+            limit: {
+              type: "INTEGER",
+              description: "Maximum number of transactions to return (default 10, max 25)",
+            },
+            start_date: {
+              type: "STRING",
+              description: "Optional start date in YYYY-MM-DD format",
+            },
+            end_date: {
+              type: "STRING",
+              description: "Optional end date in YYYY-MM-DD format",
+            },
+          },
+        },
+      },
     ],
   },
 ];
@@ -619,6 +677,54 @@ Deno.serve(async (req: Request) => {
         userMemoryText = "WHAT I REMEMBER ABOUT YOU (PERSISTENT MEMORY):\n" +
           memories.map((m: Record<string, unknown>) => `- [${String(m.memory_type).toUpperCase()}] ${m.content}`).join("\n") + "\n";
       }
+
+      // Query connected email statements & credit card summary
+      try {
+        const [emailStmtsRes, emailSubsRes, ccTxnsRes] = await Promise.all([
+          supabase
+            .from("email_extracted_transactions")
+            .select("bank_or_issuer, card_last4, statement_period, statement_due_date, statement_total_due, statement_min_due")
+            .eq("user_id", user.id)
+            .eq("is_statement", true)
+            .order("statement_due_date", { ascending: false })
+            .limit(3),
+          supabase
+            .from("email_extracted_transactions")
+            .select("merchant_name, amount, currency, recurring_frequency")
+            .eq("user_id", user.id)
+            .eq("is_recurring", true)
+            .limit(6),
+          supabase
+            .from("credit_card_transactions")
+            .select("id", { count: "exact", head: true })
+            .eq("user_id", user.id),
+        ]);
+
+        const emailStmts = emailStmtsRes.data ?? [];
+        const emailSubs = emailSubsRes.data ?? [];
+        const ccCount = ccTxnsRes.count ?? 0;
+
+        if (emailStmts.length > 0 || emailSubs.length > 0 || ccCount > 0) {
+          snapshotText += "\n\nCONNECTED EMAIL & CREDIT CARD ACCOUNTS:\n";
+          if (emailStmts.length > 0) {
+            snapshotText += "- Credit Card Statements:\n" +
+              emailStmts.map((s: Record<string, unknown>) => {
+                const dueStr = s.statement_due_date ? String(s.statement_due_date).substring(0, 10) : "N/A";
+                const total = s.statement_total_due != null ? `₹${Number(s.statement_total_due).toLocaleString("en-IN")}` : "N/A";
+                return `  * ${s.bank_or_issuer || "Card"} ending ${s.card_last4 || "XXXX"}: Total Due ${total}, Due Date: ${dueStr}`;
+              }).join("\n") + "\n";
+          }
+          if (emailSubs.length > 0) {
+            snapshotText += "- Active Email Subscriptions: " +
+              emailSubs.map((s: Record<string, unknown>) => `${s.merchant_name} (₹${s.amount}/${s.recurring_frequency === "ANNUAL" ? "yr" : "mo"})`).join(", ") + "\n";
+          }
+          if (ccCount > 0) {
+            snapshotText += `- Itemized Credit Card Transactions: ${ccCount} credit card transactions recorded in statement history.\n`;
+          }
+        }
+      } catch (emailErr) {
+        console.warn("[chat-assistant] Failed to fetch email/credit card snapshot:", emailErr);
+      }
     } catch (err) {
       console.warn("[chat-assistant] Failed to fetch financial snapshot/profile/memory:", err);
     }
@@ -732,11 +838,16 @@ DYNAMIC TOOL USAGE PROTOCOL:
    - For a general breakdown across all categories or "where did my money go", ALWAYS call get_category_breakdown first! (It now includes shop categories, bank charges, and transfers). Also check get_spending_summary for top debits.
    - For spending on a specific merchant or single category, call get_spending_summary.
 7. RECENT ACTIVITY: Call list_recent_transactions.
-8. RECURRING BILLS: Call detect_recurring_costs.
-9. SAFE TO SPEND / BUDGET LEEWAY: Call get_safe_to_spend or get_cashflow_rhythm.
-10. SPENDING PACE / RUNWAY: Call get_cashflow_velocity.
-11. CASUAL CHAT: Answer conversationally without tools.
-12. Keep answers punchy, helpful, formatted with clean bullets if listing items, and never more than 2-3 short paragraphs.
+8. RECURRING BILLS & SUBSCRIPTIONS:
+   - Call list_subscriptions for streaming, memberships, and recurring services detected from email (Netflix, Spotify, Apple, Prime, etc.).
+   - Call detect_recurring_costs for comprehensive fixed commitments across bank and recurring records.
+9. CREDIT CARD BILLS, DUES & SPENDS:
+   - If the user asks about their credit card bill, upcoming card due date, minimum due, or total credit card balance, ALWAYS call get_credit_card_summary!
+   - If the user asks about purchases made on their credit card, call list_credit_card_transactions.
+10. SAFE TO SPEND / BUDGET LEEWAY: Call get_safe_to_spend or get_cashflow_rhythm.
+11. SPENDING PACE / RUNWAY: Call get_cashflow_velocity.
+12. CASUAL CHAT: Answer conversationally without tools.
+13. Keep answers punchy, helpful, formatted with clean bullets if listing items, and never more than 2-3 short paragraphs.
 
 SELF-VALIDATION PROTOCOL (FOR REASONING FIDELITY):
 Before formulating your response:
@@ -919,7 +1030,44 @@ Before formulating your response:
             const { data, error } = await supabase.rpc("detect_recurring_costs", {
               p_user_id: user.id,
             });
-            toolResult = error ? { error: error.message } : data;
+
+            // Also fetch recurring subscriptions detected from Gmail
+            let emailSubs: Array<Record<string, unknown>> = [];
+            try {
+              const { data: subData } = await supabase
+                .from("email_extracted_transactions")
+                .select("merchant_name, amount, recurring_frequency, typical_due_day")
+                .eq("user_id", user.id)
+                .eq("is_recurring", true);
+
+              if (Array.isArray(subData)) {
+                emailSubs = subData.map((s: Record<string, unknown>) => ({
+                  merchant: s.merchant_name,
+                  monthly_amount: s.recurring_frequency === "ANNUAL" ? Number(s.amount) / 12 : Number(s.amount),
+                  category: "Subscription (Email)",
+                  frequency: s.recurring_frequency,
+                  due_day: s.typical_due_day,
+                }));
+              }
+            } catch (_) {}
+
+            if (error) {
+              toolResult = { error: error.message };
+            } else {
+              const base = (data as Record<string, unknown>) || {};
+              const bankRecurring = Array.isArray(base.recurring) ? base.recurring : [];
+              const existingNames = new Set(bankRecurring.map((r: Record<string, unknown>) => String(r.merchant ?? "").toLowerCase()));
+              const additionalEmailSubs = emailSubs.filter((e) => !existingNames.has(String(e.merchant).toLowerCase()));
+              const allRecurring = [...bankRecurring, ...additionalEmailSubs];
+              const bankMonthly = Number(base.total_monthly_recurring) || 0;
+              const emailMonthly = additionalEmailSubs.reduce((acc, curr) => acc + (Number(curr.monthly_amount) || 0), 0);
+
+              toolResult = {
+                total_monthly_recurring: Math.round((bankMonthly + emailMonthly) * 100) / 100,
+                recurring: allRecurring,
+                possible: base.possible ?? [],
+              };
+            }
           } else if (fnName === "get_cashflow_velocity") {
             const { data, error } = await supabase.rpc("get_cashflow_velocity", {
               p_user_id: user.id,
@@ -934,7 +1082,7 @@ Before formulating your response:
             });
             toolResult = error ? { error: error.message } : data;
           } else if (fnName === "search_transactions") {
-            const { data, error } = await supabase.rpc("search_transactions", {
+            const { data: bankData, error } = await supabase.rpc("search_transactions", {
               p_query: String(fnArgs.query ?? ""),
               p_type: fnArgs.flow_type ? String(fnArgs.flow_type).toUpperCase() : null,
               p_start_date: fnArgs.start_date ? String(fnArgs.start_date) : null,
@@ -942,7 +1090,166 @@ Before formulating your response:
               p_limit: fnArgs.limit ? Number(fnArgs.limit) : 10,
               p_user_id: user.id,
             });
-            toolResult = error ? { error: error.message } : data;
+
+            // Also search credit_card_transactions so credit card spends are never missed
+            let ccMatches: Array<Record<string, unknown>> = [];
+            try {
+              const q = String(fnArgs.query ?? "").trim();
+              let ccQuery = supabase
+                .from("credit_card_transactions")
+                .select("merchant_name, clean_merchant_name, amount, transaction_type, category, card_last4, card_issuer, transaction_date")
+                .eq("user_id", user.id)
+                .or(`merchant_name.ilike.%${q}%,clean_merchant_name.ilike.%${q}%,category.ilike.%${q}%`)
+                .order("transaction_date", { ascending: false })
+                .limit(5);
+
+              if (fnArgs.start_date) ccQuery = ccQuery.gte("transaction_date", String(fnArgs.start_date));
+              if (fnArgs.end_date) ccQuery = ccQuery.lte("transaction_date", String(fnArgs.end_date));
+              const { data: ccData } = await ccQuery;
+              if (Array.isArray(ccData)) {
+                ccMatches = ccData.map((c: Record<string, unknown>) => ({
+                  merchant: c.clean_merchant_name || c.merchant_name,
+                  amount: Number(c.amount),
+                  type: c.transaction_type,
+                  category: c.category ?? "Credit Card",
+                  source: `${c.card_issuer || "Credit Card"} (${c.card_last4 ? `ending ${c.card_last4}` : ""})`,
+                  date: c.transaction_date ? new Date(String(c.transaction_date)).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "short", year: "numeric" }) : null,
+                }));
+              }
+            } catch (_) {}
+
+            const bankResults = (bankData as Record<string, unknown>)?.results;
+            const combined = [...(Array.isArray(bankResults) ? bankResults : []), ...ccMatches];
+
+            toolResult = error
+              ? { error: error.message }
+              : {
+                  query: fnArgs.query,
+                  count: combined.length,
+                  results: combined,
+                };
+          } else if (fnName === "get_credit_card_summary") {
+            let stmtQuery = supabase
+              .from("email_extracted_transactions")
+              .select("card_last4, bank_or_issuer, statement_period, statement_due_date, statement_total_due, statement_min_due")
+              .eq("user_id", user.id)
+              .eq("is_statement", true);
+
+            if (fnArgs.card_last4) {
+              stmtQuery = stmtQuery.eq("card_last4", String(fnArgs.card_last4));
+            }
+
+            const { data: stmts, error: stmtErr } = await stmtQuery.order("statement_due_date", { ascending: false });
+
+            if (stmtErr) {
+              toolResult = { error: stmtErr.message };
+            } else {
+              const formattedStatements = (stmts ?? []).map((s: Record<string, unknown>) => {
+                const dueDateStr = s.statement_due_date
+                  ? new Date(String(s.statement_due_date)).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "short", year: "numeric" })
+                  : "Not specified";
+                const isOverdue = s.statement_due_date ? new Date(String(s.statement_due_date)).getTime() < Date.now() : false;
+                return {
+                  card: s.bank_or_issuer ? `${s.bank_or_issuer} (${s.card_last4 ? `ending ${s.card_last4}` : "Card"})` : `Credit Card ${s.card_last4 ?? ""}`,
+                  card_last4: s.card_last4,
+                  issuer: s.bank_or_issuer,
+                  billing_cycle: s.statement_period,
+                  due_date: dueDateStr,
+                  is_past_due: isOverdue,
+                  total_due: s.statement_total_due != null ? Number(s.statement_total_due) : null,
+                  min_due: s.statement_min_due != null ? Number(s.statement_min_due) : null,
+                };
+              });
+
+              toolResult = {
+                statement_count: formattedStatements.length,
+                statements: formattedStatements,
+                note: formattedStatements.length === 0 ? "No active credit card statements found in records." : undefined,
+              };
+            }
+          } else if (fnName === "list_subscriptions") {
+            let subQuery = supabase
+              .from("email_extracted_transactions")
+              .select("merchant_name, amount, currency, recurring_frequency, typical_due_day, transaction_date, bank_or_issuer, card_last4")
+              .eq("user_id", user.id)
+              .eq("is_recurring", true);
+
+            if (fnArgs.service_name) {
+              subQuery = subQuery.ilike("merchant_name", `%${String(fnArgs.service_name)}%`);
+            }
+
+            const { data: subs, error: subErr } = await subQuery.order("amount", { ascending: false });
+
+            if (subErr) {
+              toolResult = { error: subErr.message };
+            } else {
+              const formattedSubs = (subs ?? []).map((s: Record<string, unknown>) => ({
+                service: s.merchant_name,
+                amount: s.amount != null ? Number(s.amount) : 0,
+                currency: s.currency ?? "INR",
+                frequency: s.recurring_frequency ?? "MONTHLY",
+                typical_due_day: s.typical_due_day,
+                card_last4: s.card_last4,
+                source: s.bank_or_issuer,
+                last_billing_date: s.transaction_date
+                  ? new Date(String(s.transaction_date)).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "short", year: "numeric" })
+                  : null,
+              }));
+
+              const totalMonthly = formattedSubs.reduce((acc, curr) => {
+                const amt = Number(curr.amount) || 0;
+                if (curr.frequency === "ANNUAL") return acc + amt / 12;
+                return acc + amt;
+              }, 0);
+
+              toolResult = {
+                subscription_count: formattedSubs.length,
+                estimated_monthly_total: Math.round(totalMonthly * 100) / 100,
+                subscriptions: formattedSubs,
+              };
+            }
+          } else if (fnName === "list_credit_card_transactions") {
+            const limit = fnArgs.limit ? Math.min(Number(fnArgs.limit), 25) : 10;
+            let ccQuery = supabase
+              .from("credit_card_transactions")
+              .select("merchant_name, clean_merchant_name, amount, currency, transaction_type, section, category, card_last4, card_issuer, transaction_date")
+              .eq("user_id", user.id)
+              .order("transaction_date", { ascending: false })
+              .limit(limit);
+
+            if (fnArgs.merchant) {
+              ccQuery = ccQuery.or(`merchant_name.ilike.%${String(fnArgs.merchant)}%,clean_merchant_name.ilike.%${String(fnArgs.merchant)}%`);
+            }
+            if (fnArgs.category) {
+              ccQuery = ccQuery.ilike("category", `%${String(fnArgs.category)}%`);
+            }
+            if (fnArgs.start_date) {
+              ccQuery = ccQuery.gte("transaction_date", String(fnArgs.start_date));
+            }
+            if (fnArgs.end_date) {
+              ccQuery = ccQuery.lte("transaction_date", String(fnArgs.end_date));
+            }
+
+            const { data: txns, error: txnErr } = await ccQuery;
+            if (txnErr) {
+              toolResult = { error: txnErr.message };
+            } else {
+              toolResult = {
+                count: (txns ?? []).length,
+                transactions: (txns ?? []).map((t: Record<string, unknown>) => ({
+                  merchant: t.clean_merchant_name || t.merchant_name,
+                  amount: Number(t.amount),
+                  currency: t.currency ?? "INR",
+                  type: t.transaction_type,
+                  section: t.section,
+                  category: t.category ?? "General",
+                  card: t.card_issuer ? `${t.card_issuer} (${t.card_last4 ? `ending ${t.card_last4}` : ""})` : `Card ${t.card_last4 ?? ""}`,
+                  date: t.transaction_date
+                    ? new Date(String(t.transaction_date)).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "short", year: "numeric" })
+                    : null,
+                })),
+              };
+            }
           } else if (fnName === "recall_memory") {
             const { data, error } = await supabase.rpc("recall_user_memories", {
               p_query: fnArgs.query ? String(fnArgs.query) : null,

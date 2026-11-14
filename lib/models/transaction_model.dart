@@ -476,6 +476,40 @@ class BankTransaction {
     );
   }
 
+  /// Factory constructor to deserialize a row from public.credit_card_transactions into a BankTransaction
+  factory BankTransaction.fromCreditCardJson(Map<String, dynamic> json) {
+    final rawAmount = json['amount'] ?? json['Amount'] ?? 0;
+    final rawType = (json['transaction_type'] ?? 'DEBIT').toString().toUpperCase();
+    final isCredit = rawType == 'CREDIT';
+    final dateStr = json['transaction_date'] ?? json['created_at'];
+    final timestamp = dateStr != null
+        ? DateTime.tryParse(dateStr.toString())?.toLocal() ?? DateTime.now()
+        : DateTime.now();
+    final narration = (json['merchant_name'] ?? json['clean_merchant_name'] ?? 'Credit Card Transaction').toString();
+    final cleanMerchant = (json['clean_merchant_name'] ?? narration).toString();
+    final mode = (json['payment_mode'] ?? 'CARD').toString();
+    final refId = (json['reference_id'] ?? json['id'] ?? '').toString();
+    final category = json['category']?.toString();
+    final cardIssuer = json['card_issuer']?.toString();
+    final cardLast4 = json['card_last4']?.toString();
+
+    return BankTransaction(
+      txnId: refId.isNotEmpty ? refId : 'card_${timestamp.millisecondsSinceEpoch}',
+      type: isCredit ? TransactionType.credit : TransactionType.debit,
+      mode: mode.isNotEmpty ? mode : 'CARD',
+      amount: _parseDouble(rawAmount),
+      currentBalance: 0.0,
+      transactionTimestamp: timestamp,
+      narration: narration,
+      precomputedMerchantName: cleanMerchant,
+      category: category,
+      txnKind: 'credit_card',
+      counterpartyKey: cardIssuer != null && cardLast4 != null
+          ? '$cardIssuer ••$cardLast4'
+          : (cardIssuer ?? 'Credit Card'),
+    );
+  }
+
   Map<String, dynamic> toJson() {
     return {
       'txnId': txnId,

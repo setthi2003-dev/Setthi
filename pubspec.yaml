@@ -49,6 +49,9 @@ dependencies:
   csv: ^8.0.0
   path_provider: ^2.1.6
   uuid: ^4.6.0
+  shared_preferences: ^2.5.4
+  firebase_crashlytics: ^5.4.1
+  firebase_analytics: ^12.6.1
 
 dev_dependencies:
   flutter_test:

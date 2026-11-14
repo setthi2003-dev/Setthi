@@ -5,17 +5,21 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../config/dpc_tokens.dart';
 import '../models/chat_message_model.dart';
 import '../providers/chat_providers.dart';
+import '../providers/transaction_providers.dart';
 import 'ai_companion_rive_widget.dart';
+import 'dpc_pdf_statement_sheet.dart';
 
 /// Full DPC Styled Bottom Sheet Modal or Dedicated Full Page for Setthi AI
 class SetthiAiSheet extends ConsumerStatefulWidget {
   final String? initialPrompt;
   final bool isFullScreenPage;
+  final VoidCallback? onNavigateToGmail;
 
   const SetthiAiSheet({
     super.key,
     this.initialPrompt,
     this.isFullScreenPage = false,
+    this.onNavigateToGmail,
   });
 
   /// Static helper to display the sheet from anywhere as a modal
@@ -108,6 +112,18 @@ class _SetthiAiSheetState extends ConsumerState<SetthiAiSheet> {
   void _handleSend([String? textToSend]) {
     final text = (textToSend ?? _inputController.text).trim();
     if (text.isEmpty) return;
+
+    final hasData = ref.read(hasFinancialDataProvider).asData?.value ?? false;
+    if (!hasData) {
+      HapticFeedback.lightImpact();
+      _inputController.clear();
+      ref.read(chatMessagesProvider.notifier).addLocalExchange(
+        userPrompt: text,
+        assistantResponse: "To give you accurate, verified answers about your spending and balances, I need your transaction data first.\n\nConnect your Gmail or import a bank statement to get started.",
+      );
+      _scrollToBottom();
+      return;
+    }
 
     final credits = ref.read(aiCreditsProvider);
     if (credits <= 0) return;
@@ -403,118 +419,146 @@ class _SetthiAiSheetState extends ConsumerState<SetthiAiSheet> {
       return _buildIcebreakerEmptyState(icebreaker);
     }
 
+    final hasData = ref.watch(hasFinancialDataProvider).asData?.value ?? false;
+    if (!hasData) {
+      return _buildNoFinancialDataEmptyState();
+    }
+
     return SingleChildScrollView(
       physics: const BouncingScrollPhysics(),
-      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          // Setthi AI Companion Animated Hero Logo
-          Container(
-            width: 108,
-            height: 108,
-            decoration: BoxDecoration(
-              color: DpcColors.surfaceElevated,
-              shape: BoxShape.circle,
-              border: Border.all(
-                color: DpcColors.surfaceBorder,
-                width: 1.5,
+          const SizedBox(height: 16),
+          // Setthi AI Companion Animated Hero Logo with Ambient Radial Glow
+          Stack(
+            alignment: Alignment.center,
+            children: [
+              // Atmospheric Glow behind mascot
+              Container(
+                width: 160,
+                height: 160,
+                decoration: const BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: RadialGradient(
+                    colors: [
+                      Color(0x3338BDF8), // Electric Azure ambient glow
+                      Colors.transparent,
+                    ],
+                    radius: 0.75,
+                  ),
+                ),
               ),
-            ),
-            child: ClipOval(
-              child: const AiCompanionRiveWidget(
-                size: 105,
-                fit: Fit.cover,
+              Container(
+                width: 104,
+                height: 104,
+                decoration: BoxDecoration(
+                  color: const Color(0xE6141418),
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: const Color(0x26FFFFFF),
+                    width: 1.5,
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.5),
+                      blurRadius: 20,
+                      offset: const Offset(0, 6),
+                    ),
+                  ],
+                ),
+                child: ClipOval(
+                  child: const AiCompanionRiveWidget(
+                    size: 100,
+                    fit: Fit.cover,
+                  ),
+                ),
               ),
-            ),
+            ],
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 20),
           const Text(
             'How can I help with your money today?',
             style: TextStyle(
               color: DpcColors.textPrimary,
-              fontSize: 16,
+              fontSize: 18,
               fontWeight: FontWeight.w700,
-              letterSpacing: -0.3,
+              letterSpacing: -0.4,
             ),
             textAlign: TextAlign.center,
           ),
-          const SizedBox(height: 6),
+          const SizedBox(height: 8),
           const Text(
-            'Clear answers from your transactions • Safe & private • No guesswork',
+            'Clear answers from your transactions • Safe & private',
             style: TextStyle(
               color: DpcColors.textSecondary,
-              fontSize: 12,
-              height: 1.35,
+              fontSize: 13,
+              fontWeight: FontWeight.w400,
+              height: 1.4,
             ),
             textAlign: TextAlign.center,
           ),
-          const SizedBox(height: 24),
+          const SizedBox(height: 36),
 
-          // Suggestion Chips (Gemini style)
+          // Suggestion Chips (Minimalist, uncluttered glass cards)
           Align(
             alignment: Alignment.centerLeft,
             child: Text(
-              'TRY ASKING',
+              'SUGGESTED QUESTIONS',
               style: TextStyle(
                 color: DpcColors.textMuted,
                 fontSize: 10.5,
                 fontWeight: FontWeight.w700,
-                letterSpacing: 0.8,
+                letterSpacing: 1.2,
               ),
             ),
           ),
-          const SizedBox(height: 10),
+          const SizedBox(height: 12),
           ..._quickPrompts.map((prompt) {
             return Padding(
-              padding: const EdgeInsets.only(bottom: 8),
+              padding: const EdgeInsets.only(bottom: 10),
               child: InkWell(
                 onTap: () => _handleSend(prompt),
-                borderRadius: BorderRadius.circular(14),
+                borderRadius: BorderRadius.circular(16),
                 child: Container(
                   width: double.infinity,
                   padding: const EdgeInsets.symmetric(
-                    horizontal: 14,
-                    vertical: 12,
+                    horizontal: 18,
+                    vertical: 15,
                   ),
                   decoration: BoxDecoration(
-                    color: DpcColors.surfaceElevated,
-                    borderRadius: BorderRadius.circular(14),
+                    color: const Color(0xCC141418), // 80% Translucent Obsidian Glass
+                    borderRadius: BorderRadius.circular(16),
                     border: Border.all(
-                      color: DpcColors.surfaceBorder,
+                      color: const Color(0x1AFFFFFF), // 10% white hairline
                       width: 1,
                     ),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.35),
+                        blurRadius: 14,
+                        offset: const Offset(0, 4),
+                      ),
+                    ],
                   ),
                   child: Row(
                     children: [
-                      Container(
-                        width: 24,
-                        height: 24,
-                        decoration: BoxDecoration(
-                          color: DpcColors.surfaceElevated,
-                          shape: BoxShape.circle,
-                          border: Border.all(color: DpcColors.surfaceBorder),
-                        ),
-                        child: const Icon(
-                          Icons.auto_awesome_rounded,
-                          size: 13,
-                          color: DpcColors.textPrimary,
-                        ),
-                      ),
-                      const SizedBox(width: 10),
                       Expanded(
                         child: Text(
                           prompt,
                           style: const TextStyle(
                             color: DpcColors.textPrimary,
-                            fontSize: 13,
+                            fontSize: 14,
                             fontWeight: FontWeight.w500,
+                            letterSpacing: -0.2,
                           ),
                         ),
                       ),
+                      const SizedBox(width: 8),
                       const Icon(
                         Icons.arrow_forward_rounded,
-                        size: 15,
+                        size: 16,
                         color: DpcColors.textSecondary,
                       ),
                     ],
@@ -523,6 +567,284 @@ class _SetthiAiSheetState extends ConsumerState<SetthiAiSheet> {
               ),
             );
           }),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildNoFinancialDataEmptyState() {
+    return SingleChildScrollView(
+      physics: const BouncingScrollPhysics(),
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const SizedBox(height: 16),
+          // Setthi AI Companion Animated Hero Logo with Ambient Radial Glow
+          Stack(
+            alignment: Alignment.center,
+            children: [
+              Container(
+                width: 160,
+                height: 160,
+                decoration: const BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: RadialGradient(
+                    colors: [
+                      Color(0x3338BDF8),
+                      Colors.transparent,
+                    ],
+                    radius: 0.75,
+                  ),
+                ),
+              ),
+              Container(
+                width: 104,
+                height: 104,
+                decoration: BoxDecoration(
+                  color: const Color(0xE6141418),
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: const Color(0x26FFFFFF),
+                    width: 1.5,
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.5),
+                      blurRadius: 20,
+                      offset: const Offset(0, 6),
+                    ),
+                  ],
+                ),
+                child: ClipOval(
+                  child: const AiCompanionRiveWidget(
+                    size: 100,
+                    fit: Fit.cover,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 20),
+          const Text(
+            'Meet Setthi, your finance companion',
+            style: TextStyle(
+              color: DpcColors.textPrimary,
+              fontSize: 18,
+              fontWeight: FontWeight.w700,
+              letterSpacing: -0.4,
+            ),
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            'Connect an account or upload a statement to unlock intelligent insights, balances, and private answers.',
+            style: TextStyle(
+              color: DpcColors.textSecondary,
+              fontSize: 13,
+              fontWeight: FontWeight.w400,
+              height: 1.4,
+            ),
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 32),
+
+          // Action Cards Section (Obsidian Glass)
+          const Align(
+            alignment: Alignment.centerLeft,
+            child: Text(
+              'GET STARTED',
+              style: TextStyle(
+                color: DpcColors.textMuted,
+                fontSize: 10.5,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 1.2,
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+
+          // 1. Import Statement PDF Card (First on Top)
+          InkWell(
+            onTap: () {
+              HapticFeedback.lightImpact();
+              DpcPdfStatementSheet.show(context);
+            },
+            borderRadius: BorderRadius.circular(16),
+            child: Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+              decoration: BoxDecoration(
+                color: const Color(0xCC141418), // 80% Translucent Obsidian Glass
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(
+                  color: const Color(0x1AFFFFFF), // Hairline subtle border
+                  width: 1,
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.35),
+                    blurRadius: 14,
+                    offset: const Offset(0, 4),
+                  ),
+                ],
+              ),
+              child: Row(
+                children: [
+                  Container(
+                    width: 38,
+                    height: 38,
+                    decoration: BoxDecoration(
+                      color: DpcColors.accentPositive.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(11),
+                    ),
+                    child: const Icon(
+                      Icons.upload_file_outlined,
+                      color: DpcColors.accentPositive,
+                      size: 19,
+                    ),
+                  ),
+                  const SizedBox(width: 14),
+                  const Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Import Statement',
+                          style: TextStyle(
+                            color: DpcColors.textPrimary,
+                            fontSize: 13.5,
+                            fontWeight: FontWeight.w600,
+                            letterSpacing: -0.2,
+                          ),
+                        ),
+                        SizedBox(height: 2),
+                        Text(
+                          'Upload a bank or credit card PDF securely',
+                          style: TextStyle(
+                            color: DpcColors.textMuted,
+                            fontSize: 11.5,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const Icon(
+                    Icons.arrow_forward_rounded,
+                    size: 15,
+                    color: DpcColors.textSecondary,
+                  ),
+                ],
+              ),
+            ),
+          ),
+
+          const SizedBox(height: 10),
+
+          // 2. Sync with Gmail Card
+          InkWell(
+            onTap: () {
+              HapticFeedback.lightImpact();
+              if (widget.onNavigateToGmail != null) {
+                widget.onNavigateToGmail!();
+              } else {
+                if (!widget.isFullScreenPage && Navigator.canPop(context)) {
+                  Navigator.of(context).pop();
+                }
+                ref.read(bottomNavIndexProvider.notifier).setIndex(3);
+              }
+            },
+            borderRadius: BorderRadius.circular(16),
+            child: Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+              decoration: BoxDecoration(
+                color: const Color(0xCC141418), // 80% Translucent Obsidian Glass
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(
+                  color: const Color(0x1AFFFFFF), // Hairline subtle border
+                  width: 1,
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.35),
+                    blurRadius: 14,
+                    offset: const Offset(0, 4),
+                  ),
+                ],
+              ),
+              child: Row(
+                children: [
+                  Container(
+                    width: 38,
+                    height: 38,
+                    decoration: BoxDecoration(
+                      color: const Color(0x1A38BDF8),
+                      borderRadius: BorderRadius.circular(11),
+                    ),
+                    child: const Icon(
+                      Icons.alternate_email_rounded,
+                      color: Color(0xFF38BDF8),
+                      size: 19,
+                    ),
+                  ),
+                  const SizedBox(width: 14),
+                  const Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Sync with Gmail',
+                          style: TextStyle(
+                            color: DpcColors.textPrimary,
+                            fontSize: 13.5,
+                            fontWeight: FontWeight.w600,
+                            letterSpacing: -0.2,
+                          ),
+                        ),
+                        SizedBox(height: 2),
+                        Text(
+                          'Auto-detect credit card bills & recurring subs',
+                          style: TextStyle(
+                            color: DpcColors.textMuted,
+                            fontSize: 11.5,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const Icon(
+                    Icons.arrow_forward_rounded,
+                    size: 15,
+                    color: DpcColors.textSecondary,
+                  ),
+                ],
+              ),
+            ),
+          ),
+
+          const SizedBox(height: 24),
+
+          // Privacy & On-device indicator
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(
+                Icons.lock_outline_rounded,
+                size: 12,
+                color: DpcColors.textMuted.withValues(alpha: 0.7),
+              ),
+              const SizedBox(width: 5),
+              Text(
+                'On-device parsing • Zero third-party tracking',
+                style: TextStyle(
+                  color: DpcColors.textMuted.withValues(alpha: 0.7),
+                  fontSize: 11,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ],
+          ),
         ],
       ),
     );
@@ -1244,28 +1566,29 @@ class _SetthiAiSheetState extends ConsumerState<SetthiAiSheet> {
 
   Widget _buildInputBar(bool isZeroCredits) {
     return Container(
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
-      decoration: const BoxDecoration(
-        color: DpcColors.surfaceDark,
-        border: Border(
-          top: BorderSide(color: DpcColors.surfaceBorder, width: 1),
-          bottom: BorderSide(color: DpcColors.surfaceBorder, width: 1),
+      color: Colors.transparent,
+      padding: const EdgeInsets.fromLTRB(16, 6, 16, 14),
+      child: Container(
+        height: 52,
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        decoration: BoxDecoration(
+          color: const Color(0xE6141418), // Translucent obsidian glass
+          borderRadius: BorderRadius.circular(26),
+          border: Border.all(
+            color: const Color(0x26FFFFFF), // 15% white hairline
+            width: 1,
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.45),
+              blurRadius: 20,
+              offset: const Offset(0, 6),
+            ),
+          ],
         ),
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: Container(
-              height: 46,
-              padding: const EdgeInsets.symmetric(horizontal: 14),
-              decoration: BoxDecoration(
-                color: DpcColors.surfaceElevated,
-                borderRadius: BorderRadius.circular(23),
-                border: Border.all(
-                  color: DpcColors.surfaceBorder,
-                  width: 1,
-                ),
-              ),
+        child: Row(
+          children: [
+            Expanded(
               child: TextField(
                 controller: _inputController,
                 focusNode: _focusNode,
@@ -1274,9 +1597,10 @@ class _SetthiAiSheetState extends ConsumerState<SetthiAiSheet> {
                 onSubmitted: (_) => _handleSend(),
                 style: const TextStyle(
                   color: DpcColors.textPrimary,
-                  fontSize: 13,
+                  fontSize: 13.5,
+                  fontWeight: FontWeight.w400,
                 ),
-                cursorColor: const Color(0xFFB8F5D8),
+                cursorColor: Colors.white,
                 decoration: InputDecoration(
                   hintText:
                       isZeroCredits
@@ -1284,40 +1608,48 @@ class _SetthiAiSheetState extends ConsumerState<SetthiAiSheet> {
                           : 'Ask about balances, spends, or merchants...',
                   hintStyle: const TextStyle(
                     color: DpcColors.textMuted,
-                    fontSize: 12.5,
+                    fontSize: 13,
                   ),
                   border: InputBorder.none,
                   contentPadding: const EdgeInsets.symmetric(vertical: 12),
                 ),
               ),
             ),
-          ),
-          const SizedBox(width: 10),
+            const SizedBox(width: 8),
 
-          // Send Button
-          GestureDetector(
-            onTap: isZeroCredits ? null : () => _handleSend(),
-            child: Container(
-              width: 42,
-              height: 42,
-              decoration: BoxDecoration(
-                color:
-                    isZeroCredits
-                        ? DpcColors.surfaceElevated
-                        : DpcColors.textPrimary,
-                shape: BoxShape.circle,
-              ),
-              child: Icon(
-                Icons.arrow_upward_rounded,
-                size: 20,
-                color:
-                    isZeroCredits
-                        ? DpcColors.textMuted
-                        : DpcColors.bgOled,
+            // High-Contrast Stark White Circular Send Button
+            GestureDetector(
+              onTap: isZeroCredits ? null : () => _handleSend(),
+              child: Container(
+                width: 36,
+                height: 36,
+                decoration: BoxDecoration(
+                  color:
+                      isZeroCredits
+                          ? const Color(0xFF222226)
+                          : Colors.white,
+                  shape: BoxShape.circle,
+                  boxShadow: isZeroCredits
+                      ? null
+                      : [
+                          BoxShadow(
+                            color: Colors.white.withValues(alpha: 0.3),
+                            blurRadius: 10,
+                          ),
+                        ],
+                ),
+                child: Icon(
+                  Icons.arrow_upward_rounded,
+                  size: 20,
+                  color:
+                      isZeroCredits
+                          ? DpcColors.textMuted
+                          : Colors.black,
+                ),
               ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
