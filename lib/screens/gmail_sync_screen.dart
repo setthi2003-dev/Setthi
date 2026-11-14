@@ -332,20 +332,34 @@ class _GmailSyncScreenState extends ConsumerState<GmailSyncScreen> {
             style: ElevatedButton.styleFrom(
               backgroundColor: Colors.white,
               foregroundColor: Colors.black,
-              disabledBackgroundColor: const Color(0xFF222226),
+              disabledBackgroundColor: const Color(0xFF18181C),
               elevation: 0,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(26),
               ),
             ),
             child: isSyncing
-                ? const SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2.2,
-                      valueColor: AlwaysStoppedAnimation<Color>(Colors.black),
-                    ),
+                ? const Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          valueColor: AlwaysStoppedAnimation<Color>(Colors.white70),
+                        ),
+                      ),
+                      SizedBox(width: 10),
+                      Text(
+                        'Syncing with Gmail...',
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.white70,
+                        ),
+                      ),
+                    ],
                   )
                 : Row(
                     mainAxisAlignment: MainAxisAlignment.center,
@@ -470,12 +484,16 @@ class _GmailSyncScreenState extends ConsumerState<GmailSyncScreen> {
 
 
   Widget _buildSyncingProgressCard(GmailSyncState syncState) {
+    final hasMetrics = syncState.totalFound > 0;
     return Container(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
       decoration: BoxDecoration(
-        color: DpcColors.surfaceElevated,
+        color: const Color(0xFF111114),
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: DpcColors.accentPositive.withValues(alpha: 0.3)),
+        border: Border.all(
+          color: const Color(0x1AFFFFFF),
+          width: 1,
+        ),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -483,58 +501,47 @@ class _GmailSyncScreenState extends ConsumerState<GmailSyncScreen> {
           Row(
             children: [
               const SizedBox(
-                width: 18,
-                height: 18,
+                width: 14,
+                height: 14,
                 child: CircularProgressIndicator(
-                  strokeWidth: 2.2,
-                  valueColor: AlwaysStoppedAnimation<Color>(DpcColors.accentPositive),
+                  strokeWidth: 1.8,
+                  valueColor: AlwaysStoppedAnimation<Color>(Colors.white70),
                 ),
               ),
-              const SizedBox(width: 12),
+              const SizedBox(width: 10),
               Expanded(
                 child: Text(
                   syncState.currentStepMessage ?? 'Scanning Gmail...',
                   style: const TextStyle(
                     color: DpcColors.textPrimary,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w500,
                   ),
                 ),
               ),
+              if (hasMetrics)
+                Text(
+                  '${syncState.processedCount} of ${syncState.totalFound}',
+                  style: const TextStyle(
+                    color: DpcColors.textSecondary,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
             ],
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 10),
           ClipRRect(
-            borderRadius: BorderRadius.circular(4),
+            borderRadius: BorderRadius.circular(2),
             child: LinearProgressIndicator(
               value: syncState.status == GmailSyncStatus.fetching
                   ? syncState.progressRatio
                   : null,
-              backgroundColor: DpcColors.surfaceTrack,
-              valueColor: const AlwaysStoppedAnimation<Color>(DpcColors.accentPositive),
-              minHeight: 6,
+              backgroundColor: const Color(0x0FFFFFFF),
+              valueColor: const AlwaysStoppedAnimation<Color>(Colors.white),
+              minHeight: 2,
             ),
           ),
-          if (syncState.totalFound > 0) ...[
-            const SizedBox(height: 8),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                const Text(
-                  'Processing alerts on-device',
-                  style: TextStyle(color: DpcColors.textMuted, fontSize: 11),
-                ),
-                Text(
-                  '${syncState.processedCount} / ${syncState.totalFound}',
-                  style: const TextStyle(
-                    color: DpcColors.accentPositive,
-                    fontSize: 11,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ],
-            ),
-          ],
         ],
       ),
     );
